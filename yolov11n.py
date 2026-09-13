@@ -107,8 +107,8 @@ cv2.destroyAllWindows()
 
 if SAVE_DATA is True:
     with open('./dataset/detections.csv', 'w') as f:
-        writer = csv.DictWriter(f, fieldnames=[ 'x1','y1','x2','y2', 'confidence', 'class_name', 'tracker_id'])
-        # writer.writerow('xyxy','confidence','class_name','tracker_id')
+        writer = csv.DictWriter(f, fieldnames=['x1','y1','x2','y2','confidence','class_name','tracker_id','recording_name','frame_time','frame_num','fps'])
+           # writer.writerow('xyxy','confidence','class_name','tracker_id')
         writer.writeheader()
         writer.writerows(all_detections)
         # for row in all_detections:
