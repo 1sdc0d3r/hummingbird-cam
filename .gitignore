@@ -1,0 +1,4 @@
+dataset/detections
+dataset/recordings
+.env
+temp*.py
