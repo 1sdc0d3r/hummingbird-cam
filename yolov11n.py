@@ -19,7 +19,7 @@ RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 # MODEL_ID = 'braden-gr0sv/hummingbirds-p7kwn-1-yolo11n-t3' # v3
 MODEL_ID = 'braden-gr0sv/hummingbirds-p7kwn-2-yolo11n-t1' # v4 - overfit
 # MODEL_ID = 'braden-gr0sv/hummingbirds-p7kwn-2-yolo11n-t2' # v5 overfit
-RECORDINGS = sorted(f for f in Path('./dataset/recordings').iterdir() if f.suffix == '.mp4')
+RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 recording_idx=0
 
 LIVE = False
@@ -89,7 +89,7 @@ while cap.isOpened():
     out_img = box_annotator.annotate(scene=frame, detections=filtered_detections)
     out_img = label_annotator.annotate(scene=out_img, detections=filtered_detections, labels=labels)
 
-    # cv2.imshow(f'Hummingbird Detector - {recording_idx}', out_img)
+    cv2.imshow(f'Hummingbird Detector - {recording_idx}', out_img)
 
 
     key = cv2.waitKey(1) & 0xFF
