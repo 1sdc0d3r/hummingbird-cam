@@ -22,8 +22,8 @@ MODEL_ID = 'braden-gr0sv/hummingbirds-p7kwn-2-yolo11n-t1' # v4 - overfit
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 recording_idx=0
 
-LIVE = False
-SAVE_DATA = True
+LIVE = True
+SAVE_DATA = False
 
 
 model = get_model(model_id=MODEL_ID, api_key=API_KEY)
@@ -74,7 +74,9 @@ while cap.isOpened():
              'recording_name': RECORDINGS[recording_idx].name,
              'frame_time': int(cap.get(cv2.CAP_PROP_POS_MSEC)),
              'frame_num':int(cap.get(cv2.CAP_PROP_POS_FRAMES)),
-             'fps': int(cv2.CAP_PROP_FPS)
+             'fps': int(cap.get(cv2.CAP_PROP_FPS) or 0),
+             'model_id': MODEL_ID,
+
         }
         all_detections.append(det)
         print(det)
@@ -107,7 +109,7 @@ cv2.destroyAllWindows()
 
 if SAVE_DATA is True:
     with open('./dataset/detections.csv', 'w') as f:
-        writer = csv.DictWriter(f, fieldnames=['x1','y1','x2','y2','confidence','class_name','tracker_id','recording_name','frame_time','frame_num','fps'])
+        writer = csv.DictWriter(f, fieldnames=['x1','y1','x2','y2','confidence','class_name','tracker_id','recording_name','frame_time','frame_num','fps', 'model_id'])
            # writer.writerow('xyxy','confidence','class_name','tracker_id')
         writer.writeheader()
         writer.writerows(all_detections)
