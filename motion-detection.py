@@ -18,7 +18,7 @@ import pandas as pd
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 RECORDINGS.insert(0, './dataset/motion/cars.MP4')
-recording_idx=0
+recording_idx=1
 
 LIVE = False
 SAVE_DATA = False
@@ -73,21 +73,30 @@ while cap.isOpened():
 
     delta = cv2.absdiff(prev_frame, frame)
 
-    ret,thresh = cv2.threshold(delta, 80, 255, cv2.THRESH_BINARY)
-    # _,thresh = cv2.adaptiveThreshold(delta, 120, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY)
+    _,thresh = cv2.threshold(delta, 80, 255, cv2.THRESH_BINARY)
+    # thresh = cv2.adaptiveThreshold(delta, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 9)
 
-    contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE) # RETR_EXTERNAL/RETR_TREE
+    contours, hierarchy = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE) # RETR_EXTERNAL(boxes)/RETR_TREE(all points)
+    # print(contours)
+    # np.savetxt(f'./contours.csv', contours, delimiter=',', fmt='%d')
+    break
+    #! the contours are good, but now I want to group multiple together for obj identification
 
-    big = [c for c in contours if cv2.contourArea(c) > 200]
-    cv2.drawContours(orig_frame, big, -1, (0, 255, 0), 2)
+    # merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+    # thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, merge_kernel)
 
-    # for cnt in contours:
-    #     if cv2.contourArea(cnt) > 200:
-    #         x,y,w,h = cv2.boundingRect(cnt)
-    #         cv2.rectangle(thresh, (x,y),(x+w,y+h), (0,255,0), 2)
+    # big = [c for c in contours if cv2.contourArea(c) > 100]
+    cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
+
+    # for cnt in big:
+        # pass
+        # if cv2.contourArea(cnt) > 200:
+        # x,y,w,h = cv2.boundingRect(cnt)
+        # cv2.rectangle(orig_frame, (x,y),(x+w,y+h), (0,255,0), 2)
 
 
-    cv2.imshow('delta', orig_frame)
+    # cv2.imshow('thresh', thresh)
+    cv2.imshow('original', orig_frame)
 
     prev_frame=frame
 
@@ -98,9 +107,9 @@ while cap.isOpened():
         cap.release()
         cv2.destroyAllWindows()
         cap=capture()
-    if key == ord('f'):
-        cur_frame_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
-        np.savetxt(f'./dataset/motion/delta/frame_delta_{cur_frame_pos}.csv', delta, delimiter=',', fmt='%d')
+    # if key == ord('f'):
+    #     cur_frame_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
+    #     np.savetxt(f'./dataset/motion/delta/frame_delta_{cur_frame_pos}.csv', delta, delimiter=',', fmt='%d')
     if key == ord('q'):
         break
 
