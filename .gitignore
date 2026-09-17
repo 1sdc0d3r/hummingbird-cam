@@ -1,4 +1,5 @@
 dataset/detections
+dataset/motion
 dataset/recordings
 .env
 temp*.py

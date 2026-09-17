@@ -28,13 +28,13 @@ while True:
     blurr = cv2.GaussianBlur(frame, (5,5),0)
     edges = cv2.Canny(blurr, 100,200)
 
-    # image = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR) # purpose?
+    image = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR) # purpose?
     # greyscale = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     # cv2.resize(image, (400,600))
     # cv2.resize(greyscale, (50,70))
     # cv2.resize(edges, (400,600))
     # cv2.imshow('blurr', blurr)
-    # cv2.imshow('stream img', image)
+    cv2.imshow('stream img', image)
     # cv2.imshow('stream greyscale', greyscale)
     # cv2.imshow('stream edges', edges)
 
