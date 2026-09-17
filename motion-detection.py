@@ -12,24 +12,25 @@ from pathlib import Path
 import supervision as sv
 import csv
 import numpy as np
+import pandas as pd
 
 
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
+RECORDINGS.insert(0, './dataset/motion/cars.MP4')
 recording_idx=0
 
 LIVE = False
 SAVE_DATA = False
 RECORDER = False
 
-
 def capture():
     global recording_idx
     if LIVE:
         return cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
     else:
-        c = cv2.VideoCapture('./dataset/motion/cars.MP4')
         c = cv2.VideoCapture(RECORDINGS[recording_idx])
+        # c = cv2.VideoCapture('./dataset/motion/cars.MP4')
         recording_idx+=1
         return c
 
@@ -44,42 +45,62 @@ rec = cv2.VideoWriter('./dataset/motion/file_name.mp4',cv2.VideoWriter_fourcc(*'
 
 all_detections = []
 
-fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
+#* didn't work well
+# fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
 
+kernel = np.ones((4,4), np.uint8)
 prev_frame = cap.read()[1]
-# prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+prev_frame = cv2.erode(prev_frame, kernel)
+prev_frame = cv2.dilate(prev_frame,kernel,iterations=1)
+
+
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         cap = capture()
         continue
 
-    kernel = np.ones((2,2), np.uint8)
-    # frame = cv2.GaussianBlur(frame, (5,5), 0)
-    frame = cv2.erode(frame, kernel)
-    frame = cv2.dilate(frame,kernel,iterations=1)
+    orig_frame = frame.copy()
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # frame = cv2.erode(frame, kernel)
+    # frame = cv2.dilate(frame,kernel,iterations=1)
+    frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
 
-    # frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
-    # greyscale = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # blur = cv2.GaussianBlur(frame, (5,5), 0)
+    # bgr = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # fgmask = fgbg.apply(frame)
 
     delta = cv2.absdiff(prev_frame, frame)
-    cv2.imshow('delta', delta)
 
-    # fgmask = fgbg.apply(frame)
-    # cv2.imshow('back sub', fgmask)
-    print(len(delta))
-    # cv2.imshow(f'frame - {recording_idx}', frame)
+    ret,thresh = cv2.threshold(delta, 80, 255, cv2.THRESH_BINARY)
+    # _,thresh = cv2.adaptiveThreshold(delta, 120, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY)
 
+    contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE) # RETR_EXTERNAL/RETR_TREE
+
+    big = [c for c in contours if cv2.contourArea(c) > 200]
+    cv2.drawContours(orig_frame, big, -1, (0, 255, 0), 2)
+
+    # for cnt in contours:
+    #     if cv2.contourArea(cnt) > 200:
+    #         x,y,w,h = cv2.boundingRect(cnt)
+    #         cv2.rectangle(thresh, (x,y),(x+w,y+h), (0,255,0), 2)
+
+
+    cv2.imshow('delta', orig_frame)
+
+    prev_frame=frame
 
     if RECORDER: rec.write(frame)
-    prev_frame=frame
-    key = cv2.waitKey(1) & 0xFF
+    key = cv2.waitKey(max(1, int(1000/fps))) & 0xFF
     if key == ord('n'):
         recording_idx+=1
         cap.release()
         cv2.destroyAllWindows()
         cap=capture()
+    if key == ord('f'):
+        cur_frame_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
+        np.savetxt(f'./dataset/motion/delta/frame_delta_{cur_frame_pos}.csv', delta, delimiter=',', fmt='%d')
     if key == ord('q'):
         break
 
