@@ -79,20 +79,20 @@ while cap.isOpened():
     contours, hierarchy = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE) # RETR_EXTERNAL(boxes)/RETR_TREE(all points)
     # print(contours)
     # np.savetxt(f'./contours.csv', contours, delimiter=',', fmt='%d')
-    break
+    # break
     #! the contours are good, but now I want to group multiple together for obj identification
 
     # merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
     # thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, merge_kernel)
 
-    # big = [c for c in contours if cv2.contourArea(c) > 100]
-    cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
+    #* cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
 
-    # for cnt in big:
-        # pass
-        # if cv2.contourArea(cnt) > 200:
-        # x,y,w,h = cv2.boundingRect(cnt)
-        # cv2.rectangle(orig_frame, (x,y),(x+w,y+h), (0,255,0), 2)
+    big = [c for c in contours if cv2.contourArea(c) > 30]
+    print(len(big))
+    for cnt in big:
+        # if cv2.contourArea(cnt) > 50: #300
+        x,y,w,h = cv2.boundingRect(cnt)
+        cv2.rectangle(orig_frame, (x,y),(x+w,y+h), (0,255,0), 2)
 
 
     # cv2.imshow('thresh', thresh)
