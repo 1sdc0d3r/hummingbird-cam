@@ -2,3 +2,5 @@ dataset/detections
 dataset/recordings
 .env
 temp*.py
+tempCodeRunnerFile.py
+
