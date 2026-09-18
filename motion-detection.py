@@ -13,7 +13,7 @@ import supervision as sv
 import csv
 import numpy as np
 import pandas as pd
-import math
+from scipy import stats
 
 
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
@@ -39,7 +39,7 @@ def capture():
 
 cap = capture()
 FRAME_COUNT = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if not LIVE else -1
-FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) 
+FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) # 1920x1080
 FPS = int(cap.get(cv2.CAP_PROP_FPS))
 print(f'Frame count: {FRAME_COUNT:,}  |  Size: {FRAME_WIDTH}x{FRAME_HEIGHT}  |  FPS: {FPS}')
@@ -55,8 +55,10 @@ def merge_boxes(rects, grow=1):
     boxes = []
     centers = []
     objects = []
+
+    rects.sort(key=lambda r: (r[0]**2 + r[1]**2))
     for x,y,w,h in rects: #grow boxes
-        if w < 2 and h < 2: continue # filter out single pixel boxes
+        # if w < 2 and h < 2: continue # filter out single pixel boxes
 
         # size = int((w*h)**.5) # increase based on box size
         # pad = int(size * grow)
@@ -71,20 +73,37 @@ def merge_boxes(rects, grow=1):
         centers.append(center)
 
 
-    # if len(boxes) <= 1: return boxes
-
     # Z = np.float32([(x,y) for x,y,_,_ in boxes])
-
     if len(boxes):
-        avg_std = int(sum(np.std(centers,axis=0))/2) # (x,y)
-        # boxes.sort(key=lambda item: (item[0], item[1]))
-        # print(avg_std)
-        if avg_std < 50:
-            box = min(boxes, key=lambda item: (item[0], item[1])) # get most upper-left box
-            objects.append(box) #* normalize min box size (width/height)
+        # print(centers)
+        avg_std = int(np.mean(np.std(centers,axis=0))) # (x,y)
+
+
+
+        if avg_std < 50: #* single detection area
+            # box = min(boxes, key=lambda b: (b[0], b[1])) # get most upper-left box
+            objects.append(boxes[0]) #* normalize min box size (width/height)
         else:
-            print(avg_std, centers, boxes)
-            pass
+            # print(avg_std)
+
+            std_dev = np.std(centers,axis=0)
+            mean = np.mean(centers,axis=0)
+            z_scores = (centers-mean) / std_dev
+            z_norm = np.linalg.norm(z_scores, axis=1)
+
+
+            # group1 = []
+            # group2 = []
+            # print(std_dev)
+            for c,z,b in zip(centers, z_norm, boxes):
+                print(c,z)
+                # if z < 2.2: group1.append(b)
+                # else: group2.append(b)
+                
+            # print(f'g1:{group1}\ng2:{group2}')
+            # objects.append(group1[0])
+            # objects.append(group2[0])
+            # pass
 
     return objects
 
@@ -125,8 +144,8 @@ while cap.isOpened():
     # thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, merge_kernel)
 
     #* cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
-    #* contourArea is used to filter out some white noise from thresh
-    rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 10]
+    #* contourArea is used to filter out some white noise from thresh and camera
+    rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #!20
     # rectangles += rectangles  # Ensure proper weighting for groupThreshold=1
     # rectangles = merge_boxes(rectangles)
 
@@ -149,8 +168,8 @@ while cap.isOpened():
         # if cv2.contourArea(c) > 50: #300
 
 
-    # cv2.imshow('thresh', thresh)
-    cv2.imshow('original', orig_frame)
+    cv2.imshow('thresh', thresh)
+    # cv2.imshow('original', orig_frame)
 
     prev_frame=frame
 
