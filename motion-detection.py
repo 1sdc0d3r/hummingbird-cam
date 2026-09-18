@@ -13,12 +13,13 @@ import supervision as sv
 import csv
 import numpy as np
 import pandas as pd
+import math
 
 
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 RECORDINGS.insert(0, './dataset/motion/cars.MP4')
-recording_idx=1
+recording_idx=0
 
 LIVE = False
 SAVE_DATA = False
@@ -37,37 +38,55 @@ def capture():
 
 
 cap = capture()
-frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if not LIVE else -1
-frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-fps = int(cap.get(cv2.CAP_PROP_FPS))
-print(f'Frame count: {frame_count:,}  |  Size: {frame_width}x{frame_height}  |  FPS: {fps}')
-rec = cv2.VideoWriter('./dataset/motion/file_name.mp4',cv2.VideoWriter_fourcc(*'mp4v'),fps,(frame_width,frame_height),True)
+FRAME_COUNT = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if not LIVE else -1
+FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) 
+FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) # 1920x1080
+FPS = int(cap.get(cv2.CAP_PROP_FPS))
+print(f'Frame count: {FRAME_COUNT:,}  |  Size: {FRAME_WIDTH}x{FRAME_HEIGHT}  |  FPS: {FPS}')
+rec = cv2.VideoWriter('./dataset/motion/file_name.mp4',cv2.VideoWriter_fourcc(*'mp4v'),FPS,(FRAME_WIDTH,FRAME_HEIGHT),True)
 
 
-def merge_boxes(rects, grow=10):
+def merge_boxes(rects, grow=1):
     grow /= 100
     grow += 1 # grow 10%
     #* boundingRec: x,y,w,h (top left corner, width, height)
     #* cv2 (0,0) coord is also top left
 
     boxes = []
+    centers = []
+    objects = []
     for x,y,w,h in rects: #grow boxes
-        size = (w+h)/4 # increase based on box size
-        pad = int(size * grow)
-        x = max(0, x-pad)
-        y = max(0, y-pad)
-        w = min(w+2*pad, frame_width-x)
-        h = min(h+2*pad, frame_height-y)
+        if w < 2 and h < 2: continue # filter out single pixel boxes
 
-        if w > 1 and h > 1: # filter out single pixel boxes
-            boxes.append((x,y,w,h)) 
+        # size = int((w*h)**.5) # increase based on box size
+        # pad = int(size * grow)
+        # x = max(0, x-pad)
+        # y = max(0, y-pad)
+        # w = min(w+pad, FRAME_WIDTH-x)
+        # h = min(h+pad, FRAME_HEIGHT-y)
+
+        boxes.append((x,y,w,h))
+        # d = np.ceil(np.sqrt((w-x)**2 + (h-y)**2).astype(int) / 2)
+        center=(x+w//2, y+h//2)
+        centers.append(center)
 
 
-    # print(f'{rects}\n{boxes}')
-    return boxes
+    # if len(boxes) <= 1: return boxes
 
-    # 1920x1080
+    # Z = np.float32([(x,y) for x,y,_,_ in boxes])
+
+    if len(boxes):
+        avg_std = int(sum(np.std(centers,axis=0))/2) # (x,y)
+        # boxes.sort(key=lambda item: (item[0], item[1]))
+        # print(avg_std)
+        if avg_std < 50:
+            box = min(boxes, key=lambda item: (item[0], item[1])) # get most upper-left box
+            objects.append(box) #* normalize min box size (width/height)
+        else:
+            print(avg_std, centers, boxes)
+            pass
+
+    return objects
 
 
 #* didn't work well
@@ -93,6 +112,9 @@ while cap.isOpened():
     delta = cv2.absdiff(prev_frame, frame)
 
     _,thresh = cv2.threshold(delta, 80, 255, cv2.THRESH_BINARY)
+
+    thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
+
     # thresh = cv2.adaptiveThreshold(delta, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 9)
 
     # merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (40,40))
@@ -103,7 +125,8 @@ while cap.isOpened():
     # thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, merge_kernel)
 
     #* cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
-    rectangles = [list(cv2.boundingRect(c)) for c in contours]
+    #* contourArea is used to filter out some white noise from thresh
+    rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 10]
     # rectangles += rectangles  # Ensure proper weighting for groupThreshold=1
     # rectangles = merge_boxes(rectangles)
 
@@ -111,10 +134,10 @@ while cap.isOpened():
     # print(len(rectangles), len(grouped_rects), weights)
     # print(len(rectangles))
     boxes = merge_boxes(rectangles)
-    print(len(boxes),boxes)
+    # print(len(boxes),boxes)
 
     for (x, y, w, h) in boxes:
-        cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 1)
+        cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
 
     # big = [c for c in contours if cv2.contourArea(c) > 30]
@@ -132,7 +155,7 @@ while cap.isOpened():
     prev_frame=frame
 
     if RECORDER: rec.write(frame)
-    key = cv2.waitKey(max(1, int(1000/fps))) & 0xFF
+    key = cv2.waitKey(max(1, int(1000/FPS))) & 0xFF
     if key == ord('n'):
         recording_idx+=1
         cap.release()
