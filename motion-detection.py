@@ -9,11 +9,7 @@ for _flag in ("QWEN_2_5_ENABLED",
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
 import cv2
 from pathlib import Path
-import supervision as sv
-import csv
 import numpy as np
-import pandas as pd
-from scipy import stats
 
 
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
@@ -22,7 +18,6 @@ RECORDINGS.insert(0, './dataset/motion/cars.MP4')
 recording_idx=0
 
 LIVE = False
-SAVE_DATA = False
 RECORDER = False
 
 def capture():
@@ -54,64 +49,54 @@ def merge_boxes(rects, grow=1):
     #* cv2 (0,0) coord is also top left
 
     boxes = []
-    centers = []
     objects = []
 
     rects.sort(key=lambda r: (r[0]**2 + r[1]**2))
-    for x,y,w,h in rects: #grow boxes
-        # if w < 2 and h < 2: continue # filter out single pixel boxes
+    # for x,y,w,h in rects: #grow boxes
+    #     # if w < 2 and h < 2: continue # filter out single pixel boxes
 
-        # size = int((w*h)**.5) # increase based on box size
-        # pad = int(size * grow)
-        # x = max(0, x-pad)
-        # y = max(0, y-pad)
-        # w = min(w+pad, FRAME_WIDTH-x)
-        # h = min(h+pad, FRAME_HEIGHT-y)
+    #     # size = int((w*h)**.5) # increase based on box size
+    #     # pad = int(size * grow)
+    #     # x = max(0, x-pad)
+    #     # y = max(0, y-pad)
+    #     # w = min(w+pad, FRAME_WIDTH-x)
+    #     # h = min(h+pad, FRAME_HEIGHT-y)
 
-        boxes.append((x,y,w,h))
-        # d = np.ceil(np.sqrt((w-x)**2 + (h-y)**2).astype(int) / 2)
-        center=(x+w//2, y+h//2)
-        centers.append(center)
-
+    #     boxes.append((x,y,w,h))
+    #     # d = np.ceil(np.sqrt((w-x)**2 + (h-y)**2).astype(int) / 2)
+    #     center=(x+w//2, y+h//2)
+    #     centers.append(center)
 
     # Z = np.float32([(x,y) for x,y,_,_ in boxes])
-    if len(boxes):
-        # print(centers)
+    if len(rects):
+        # items = list(zip(centers, boxes))
+        items = [((x+w//2, y+h//2), (x,y,w,h)) for x,y,w,h in rects] #center and box
+        centers = [c for c,_ in items]
         avg_std = int(np.mean(np.std(centers,axis=0))) # (x,y)
 
         if avg_std < 50: #* single detection area
-            # box = min(boxes, key=lambda b: (b[0], b[1])) # get most upper-left box
-            objects.append(boxes[0]) #* normalize min box size (width/height)
+            objects.append(items[0][1]) #* normalize min box size (width/height)
         else:
-            print(f'avg_std: {avg_std}')
+            # print(f'avg_std: {avg_std}')
             # std_dev = np.std(centers,axis=0)
             # mean = np.mean(centers,axis=0)
             # z_scores = (centers-mean) / std_dev
             # z_norm = np.linalg.norm(z_scores, axis=1)
-            group_obj = []
             # dists = [int(np.linalg.norm(np.asarray(c) - np.asarray(c1))) for c in centers]
-            items = list(zip(centers, boxes))
+
             while len(items) > 1:
                 # c1 = items[len(centers)//2][0] #* may change to [0] over len, maybe mean?
-                c1 = items[0][0]
+                c1 = items[0][0] #! seed needs to be changed, hmmmmm maybe item with std_dev of 0?
 
                 group1,group2 = [],[]
                 for c,b in items:
                     dist = np.linalg.norm(np.asarray(c) - np.asarray(c1))
-                    # (group1 if dist < 150 else group2).append(c)
-                    if dist < 150:
-                        group1.append((c,b))
-                    else:
-                        group2.append((c,b))
+                    (group1 if dist < 150 else group2).append((c,b))
                 if group1:
-                    group_obj.append(group1[0][1]) #* only 1 per group
+                    objects.append(group1[0][1]) #* only 1 box per group
                 items = group2
             if items: #leftover after loop
-                group_obj.append(items[0][1])
-            # for g in group_obj:
-            #     # print('g:', g)
-            #     pass
-            objects = group_obj
+                objects.append(items[0][1])
     # print(len(objects))
     return objects
 
@@ -137,51 +122,34 @@ while cap.isOpened():
 
 
     delta = cv2.absdiff(prev_frame, frame)
-
     _,thresh = cv2.threshold(delta, 80, 255, cv2.THRESH_BINARY)
-
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
 
     # thresh = cv2.adaptiveThreshold(delta, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 9)
-
     # merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (40,40))
-    # thresh = cv2.morphologyEx(thresh,cv2.MORPH_CLOSE, kernel) #* too slow (with merge_kernel)
+    # thresh = cv2.morphologyEx(thresh,cv2.MORPH_CLOSE, merge_kernel) #* too slow (with merge_kernel)
 
     contours, hierarchy = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE) # RETR_EXTERNAL(boxes)/RETR_TREE(all points)
 
-    # thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, merge_kernel)
 
     #* cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
     #* contourArea is used to filter out some white noise from thresh and camera
     rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #!20
-    # rectangles += rectangles  # Ensure proper weighting for groupThreshold=1
-    # rectangles = merge_boxes(rectangles)
 
     # grouped_rects, weights = cv2.groupRectangles(rectangles, groupThreshold=2, eps=6)
-    # print(len(rectangles), len(grouped_rects), weights)
-    # print(len(rectangles))
+
     boxes = merge_boxes(rectangles)
-    # print(len(boxes),boxes)
+    # if boxes: print(len(boxes),boxes)
 
     for (x, y, w, h) in boxes:
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-
-    # big = [c for c in contours if cv2.contourArea(c) > 30]
-    # print(len(big))
-    # for c in contours:
-    #     x,y,w,h = cv2.boundingRect(c)
-    #     cv2.rectangle(orig_frame, (x,y),(x+w,y+h), (0,255,0), 2)
-    #     continue
-        # if cv2.contourArea(c) > 50: #300
-
 
     # cv2.imshow('thresh', thresh)
     cv2.imshow('original', orig_frame)
 
     prev_frame=frame
 
-    if RECORDER: rec.write(frame)
+    if RECORDER: rec.write(orig_frame)
     key = cv2.waitKey(max(1, int(1000/FPS))) & 0xFF
     if key == ord('n'):
         recording_idx+=1
