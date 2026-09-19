@@ -20,6 +20,7 @@ RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 RECORDINGS.insert(0, './dataset/motion/cars.MP4')
 recording_idx=10
+FEEDER = (75,325,200,125) # [75:275, 325:450]
 
 LIVE = False
 RECORDER = False
@@ -66,6 +67,11 @@ def grow_rectangles(rects, grow=1):
         # Z = np.float32([(x,y) for x,y,_,_ in boxes])
     return boxes
 
+def by_feeder(center):
+    x, y, w, h = FEEDER
+    cx, cy = center
+    return x <= cx < x + w and y <= cy < y + h
+
 def merge_rectangles(rects):
     #* boundingRec: x,y,w,h (top left corner, width, height)
     #* cv2 (0,0) coord is also top left
@@ -80,7 +86,7 @@ def merge_rectangles(rects):
         if avg_std < 50: #* single detection area
             objects.append(items[0][1]) #* normalize min box size (width/height)
         else:
-            print('avg',avg_std)
+            # print('avg',avg_std)
             # print(f'avg_std: {avg_std}')
             # std_dev = np.std(centers,axis=0)
             # mean = np.mean(centers,axis=0)
@@ -107,8 +113,23 @@ def merge_rectangles(rects):
 
 # live_tracker = [{'uuid':'uuid()','TTL':15,'center':(0,0),'count':0, 'test':True}] #* frame nums?
 live_tracker=[]
-def update_tracker(new, tracker=live_tracker):
-    centers = [(x+w//2, y+h//2) for x,y,w,h in new]
+def update_tracker(objects, frame_num, tracker=live_tracker):
+    #* remove expired trackers (save to db)
+    for t in tracker:
+        t['TTL'] -= 1
+        if t['TTL'] <= 0:
+            print(f"remove-{t['center']}")
+            tracker.remove(t)
+        # elif (t['last_frame'] - t['init_frame'] == 5) and (t['count'] <= 2):
+        #     print(f"remove-{t['center']}-Noise")
+        #     tracker.remove(t)
+
+
+        # elif t['TTL'] < 50 and t['count'] < 3: #* temp to filter out noise
+            # print(f"remove-{t['center']}")
+            # tracker.remove(t)
+
+    centers = [(x+w//2, y+h//2) for x,y,w,h in objects]
 
     #! use vectors to predict motion rather than just double loop
     for i,center in enumerate(centers):
@@ -123,37 +144,35 @@ def update_tracker(new, tracker=live_tracker):
                 dist=l2
                 trk = t
 
+        ttl = 60 if by_feeder(center) else FPS*2 #birds sitting or hovering
         if trk and dist < 200:
             # print(dist)
-            trk['TTL'] = 60
+            trk['TTL'] = ttl
             trk['count'] += 1
             trk['center'] = center
-            trk['box'] = new[i]
+            trk['box'] = objects[i]
+            trk['last_frame'] = frame_num
             # centers.remove(center)
         else:
             #* new trackers
-            new_obj = {'uuid':uuid4(),'TTL':60,'center':center,'box':new[i],'count':1}
+            new_obj = {'uuid':uuid4(),'TTL':ttl,'center':center,'box':objects[i],'count':1,'init_frame':frame_num,'last_frame':frame_num}
             tracker.append(new_obj)
-            print(f'new-{center}-{dist}' )
+            print(f'new-{center}-{dist}')
 
-    #* remove expired trackers (save to db)
-    for t in tracker:
-        t['TTL'] -= 1
-        if t['TTL'] <= 0:
-            print(f"remove-{t['center']}")
-            tracker.remove(t)
+
 
 
 
 #* didn't work well
 # fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
 
-kernel = np.ones((4,4), np.uint8)
+# kernel = np.ones((1,1), np.uint8) #* ODD (1 in None)
 prev_frame = cap.read()[1] #
 prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_OPEN, kernel)
+# prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_OPEN, kernel)
+# prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_CLOSE, kernel)
 
-# cap.set(cv2.CAP_PROP_POS_FRAMES, 140)
+cap.set(cv2.CAP_PROP_POS_FRAMES, 140)
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
@@ -164,7 +183,7 @@ while cap.isOpened():
     if cur_frame_count % 10 == 0:
         print('frame:',cur_frame_count)
         for t in live_tracker:
-            # print(t)
+            print(t)
             pass
         print('-'*5)
 
@@ -175,11 +194,12 @@ while cap.isOpened():
 
     orig_frame = frame.copy()
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
+    # frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
 
     delta = cv2.absdiff(prev_frame, frame)
-    _,thresh = cv2.threshold(delta, 45, 255, cv2.THRESH_BINARY) #! 80-lower causes more noise
+    _,thresh = cv2.threshold(delta, 35, 255, cv2.THRESH_BINARY) #! 80-lower causes more noise
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
+
 
 
     # thresh = cv2.adaptiveThreshold(delta, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 9)
@@ -195,7 +215,8 @@ while cap.isOpened():
     #* contourArea is used to filter out some white noise from thresh and camera
     rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 25] #! 20
     objects = merge_rectangles(rectangles)
-    update_tracker(objects)
+    # if cur_frame_count > 145: update_tracker(objects) # init flash of changes
+    update_tracker(objects,cur_frame_count)
 
     for t in live_tracker:
         x, y, w, h = t['box']
@@ -203,6 +224,7 @@ while cap.isOpened():
         cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 0, 0), 1)
         # cv2.line(orig_frame, (x,y), (prev_objects[0][0], prev_objects[0][1]), (255,0,0),2)
 
+#! IMSHOW
     cv2.imshow('thresh', thresh)
     # cv2.imshow(f'original - {recording_idx}', orig_frame)
 

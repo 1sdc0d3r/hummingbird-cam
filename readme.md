@@ -3,3 +3,4 @@ todo:
 
 
 motion-detection.py
+ - after obj leaves (shert)
