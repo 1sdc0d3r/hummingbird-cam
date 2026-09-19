@@ -10,12 +10,16 @@ os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
 import cv2
 from pathlib import Path
 import numpy as np
+from uuid import uuid4
+from datetime import datetime as dt
 
+#todo convert to full numpy for speed
+#? keep consistent w/h sizes? only use center or x/y?
 
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 RECORDINGS.insert(0, './dataset/motion/cars.MP4')
-recording_idx=0
+recording_idx=10
 
 LIVE = False
 RECORDER = False
@@ -30,8 +34,6 @@ def capture():
         recording_idx+=1
         return c
 
-
-
 cap = capture()
 FRAME_COUNT = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if not LIVE else -1
 FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -39,7 +41,6 @@ FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) # 1920x1080
 FPS = int(cap.get(cv2.CAP_PROP_FPS))
 print(f'Frame count: {FRAME_COUNT:,}  |  Size: {FRAME_WIDTH}x{FRAME_HEIGHT}  |  FPS: {FPS}')
 rec = cv2.VideoWriter('./dataset/motion/file_name.mp4',cv2.VideoWriter_fourcc(*'mp4v'),FPS,(FRAME_WIDTH,FRAME_HEIGHT),True)
-
 
 def get_rec_center(x,y,w,h):
     return (x+w//2, y+h//2)
@@ -105,6 +106,50 @@ def merge_contours(rects=[], grow=1):
     # print(len(objects))
     return objects
 
+# live_tracker = [{'uuid':'uuid()','TTL':15,'center':(0,0),'count':0, 'test':True}] #* frame nums?
+live_tracker=[]
+def update_tracker(new, tracker=live_tracker):
+    # print('-'*5)
+    # old_items = [((x+w//2, y+h//2), (x,y,w,h)) for x,y,w,h in old] #center and box
+    # items = [((x+w//2, y+h//2), (x,y,w,h)) for x,y,w,h in new] #! center and box ONLY CENTER?
+    centers = [(x+w//2, y+h//2) for x,y,w,h in new]
+    # old_centers = [c for c,_ in old]
+    # print('new:', items)
+    # if not new: # no objects this frame
+    #     return
+
+    for t in tracker: #! don't do fcfs. check dist on every tracker first. swap centers and trackers. separate logic
+        t['TTL'] -= 1
+        for i, new_center in enumerate(centers.copy()):
+            t_center = np.array(t.get('center')) #convert all code later
+            new_center = np.array(new_center)
+            l2 = int(np.linalg.norm(new_center-t_center))
+
+            # print(f't_center:{t_center} - new_center:{new_center} - l2: {l2}')
+            if l2 < 150:
+                t['TTL'] = 30
+                t['count'] += 1
+                t['center'] = new_center
+                centers.pop(i)
+
+        #* remove old trackers (save to db)
+        if t['TTL'] <= 0:
+            print(f"remove-{t['center']}")
+            tracker.remove(t)
+
+    #* new trackers
+    for c in centers:
+        new_obj = {'uuid':uuid4(),'TTL':30,'center':c,'count':1}
+        tracker.append(new_obj)
+        print(f'new-{c}')
+
+
+        # print('\n')
+    # for (x, y, w, h),(x1, y1, w1, h1) in zip(old, new):
+    #     d = (x+w//2 + y+h//2)
+    #     d2 = (x1+w1//2 + y1+h1//2)
+    #     print(abs(d-d2))
+
 
 #* didn't work well
 # fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
@@ -112,18 +157,27 @@ def merge_contours(rects=[], grow=1):
 kernel = np.ones((4,4), np.uint8)
 prev_frame = cap.read()[1] #
 prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-# prev_frame = cv2.erode(prev_frame, kernel)
-# prev_frame = cv2.dilate(prev_frame,kernel,iterations=1)
 prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_OPEN, kernel)
+prev_objects = []
 
-prev_boxes = []
-
-
+cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         cap = capture()
         continue
+
+    cur_frame_count = cap.get(cv2.CAP_PROP_POS_FRAMES)
+    if cur_frame_count % 10 == 0:
+        #  print(cur_frame_count)
+        for t in live_tracker:
+            print(t)
+        print('-'*5)
+
+        #  break
+    # if cur_frame_count > 500:
+    #     print(live_tracker)
+    #     break
 
     orig_frame = frame.copy()
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -142,31 +196,23 @@ while cap.isOpened():
 
 
     #* cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
-
     # grouped_rects, weights = cv2.groupRectangles(rectangles, groupThreshold=2, eps=6)
 
-    boxes = merge_contours(contours)
-    # if boxes: print(len(boxes),boxes)
-    # if boxes != prev_boxes:
-    print(boxes,prev_boxes)
-    for (x, y, w, h),(x1, y1, w1, h1) in zip(boxes, prev_boxes):
-        d = (x+w//2 + y+h//2)
-        d2 = (x1+w1//2 + y1+h1//2)
-        print(abs(d-d2))
+    objects = merge_contours(contours)
 
+    update_tracker(objects)
 
-
-    for (x, y, w, h) in boxes:
+    for (x, y, w, h) in objects:
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        # if prev_boxes:
-        # cv2.line(orig_frame, (x,y), (prev_boxes[0][0], prev_boxes[0][1]), (255,0,0),2)
+        # if prev_objects:
+        # cv2.line(orig_frame, (x,y), (prev_objects[0][0], prev_objects[0][1]), (255,0,0),2)
 
     # cv2.imshow('thresh', thresh)
-    cv2.imshow('original', orig_frame)
+    cv2.imshow(f'original - {recording_idx}', orig_frame)
 
 
     prev_frame = frame
-    if boxes: prev_boxes = boxes #for tracking when obj stops
+    prev_objects = objects # for tracking when obj stops
 
     if RECORDER: rec.write(orig_frame)
     key = cv2.waitKey(max(1, int(1000/FPS))) & 0xFF
