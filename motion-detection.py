@@ -45,43 +45,42 @@ rec = cv2.VideoWriter('./dataset/motion/file_name.mp4',cv2.VideoWriter_fourcc(*'
 def get_rec_center(x,y,w,h):
     return (x+w//2, y+h//2)
 
-def merge_contours(rects=[], grow=1):
-    #* contourArea is used to filter out some white noise from thresh and camera
-    rects = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #!20
-    # grow /= 100
-    # grow += 1 # grow 10%
+def grow_rectangles(rects, grow=1):
+    grow /= 100
+    grow += 1 # grow 10%
+    boxes = []
+    for x,y,w,h in rects: #grow boxes
+            # if w < 2 and h < 2: continue # filter out single pixel boxes
+            size = int((w*h)**.5) # increase based on box size
+            pad = int(size * grow)
+            x = max(0, x-pad)
+            y = max(0, y-pad)
+            w = min(w+pad, FRAME_WIDTH-x)
+            h = min(h+pad, FRAME_HEIGHT-y)
+
+            boxes.append((x,y,w,h))
+            # d = np.ceil(np.sqrt((w-x)**2 + (h-y)**2).astype(int) / 2)
+            # center=(x+w//2, y+h//2)
+            # centers.append(center)
+
+        # Z = np.float32([(x,y) for x,y,_,_ in boxes])
+    return boxes
+
+def merge_rectangles(rects):
     #* boundingRec: x,y,w,h (top left corner, width, height)
     #* cv2 (0,0) coord is also top left
-
-    # boxes = []
     objects = []
-
     rects.sort(key=lambda r: (r[0]**2 + r[1]**2))
-    # for x,y,w,h in rects: #grow boxes
-    #     # if w < 2 and h < 2: continue # filter out single pixel boxes
 
-    #     # size = int((w*h)**.5) # increase based on box size
-    #     # pad = int(size * grow)
-    #     # x = max(0, x-pad)
-    #     # y = max(0, y-pad)
-    #     # w = min(w+pad, FRAME_WIDTH-x)
-    #     # h = min(h+pad, FRAME_HEIGHT-y)
-
-    #     boxes.append((x,y,w,h))
-    #     # d = np.ceil(np.sqrt((w-x)**2 + (h-y)**2).astype(int) / 2)
-    #     center=(x+w//2, y+h//2)
-    #     centers.append(center)
-
-    # Z = np.float32([(x,y) for x,y,_,_ in boxes])
     if len(rects):
         # items = list(zip(centers, boxes))
         items = [((x+w//2, y+h//2), (x,y,w,h)) for x,y,w,h in rects] #center and box
         centers = [c for c,_ in items]
         avg_std = int(np.mean(np.std(centers,axis=0))) # (x,y)
-
         if avg_std < 50: #* single detection area
             objects.append(items[0][1]) #* normalize min box size (width/height)
         else:
+            print('avg',avg_std)
             # print(f'avg_std: {avg_std}')
             # std_dev = np.std(centers,axis=0)
             # mean = np.mean(centers,axis=0)
@@ -112,7 +111,7 @@ def update_tracker(new, tracker=live_tracker):
     centers = [(x+w//2, y+h//2) for x,y,w,h in new]
 
     #! use vectors to predict motion rather than just double loop
-    for center in centers:
+    for i,center in enumerate(centers):
         center = np.array(center)
 
         trk = dict()
@@ -120,59 +119,31 @@ def update_tracker(new, tracker=live_tracker):
         for t in tracker:
             t_center = np.array(t.get('center')) #convert all code later
             l2 = int(np.linalg.norm(center-t_center))
-            print('l2',l2)
             if l2 < dist or dist == -1:
                 dist=l2
                 trk = t
 
-        if trk and dist < 50:
+        if trk and dist < 200:
+            # print(dist)
             trk['TTL'] = 60
             trk['count'] += 1
             trk['center'] = center
+            trk['box'] = new[i]
             # centers.remove(center)
         else:
             #* new trackers
-            new_obj = {'uuid':uuid4(),'TTL':60,'center':center,'count':1}
+            new_obj = {'uuid':uuid4(),'TTL':60,'center':center,'box':new[i],'count':1}
             tracker.append(new_obj)
-            print(f'new-{center}')
-
+            print(f'new-{center}-{dist}' )
 
     #* remove expired trackers (save to db)
     for t in tracker:
-        if t['TTL'] <= 0:
-            print(f"remove-{t['center']}")
-            tracker.remove(t)
-
-
-
-
-'''
-    for t in tracker: #! don't do fcfs. check dist on every tracker first. swap centers and trackers. separate logic
         t['TTL'] -= 1
-        for i, new_center in enumerate(centers.copy()):
-            t_center = np.array(t.get('center')) #convert all code later
-            new_center = np.array(new_center)
-            l2 = int(np.linalg.norm(new_center-t_center))
-
-            # print(f't_center:{t_center} - new_center:{new_center} - l2: {l2}')
-            if l2 < 50:
-                t['TTL'] = 60
-                t['count'] += 1
-                t['center'] = new_center
-                centers.pop(i)
-
-        #* remove old trackers (save to db)
         if t['TTL'] <= 0:
             print(f"remove-{t['center']}")
             tracker.remove(t)
 
-    #* new trackers
-    for c in centers:
-        new_obj = {'uuid':uuid4(),'TTL':60,'center':c,'count':1}
-        tracker.append(new_obj)
-        print(f'new-{c}')
 
-'''
 
 #* didn't work well
 # fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
@@ -181,9 +152,8 @@ kernel = np.ones((4,4), np.uint8)
 prev_frame = cap.read()[1] #
 prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
 prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_OPEN, kernel)
-prev_objects = []
 
-cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+# cap.set(cv2.CAP_PROP_POS_FRAMES, 140)
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
@@ -192,9 +162,10 @@ while cap.isOpened():
 
     cur_frame_count = cap.get(cv2.CAP_PROP_POS_FRAMES)
     if cur_frame_count % 10 == 0:
-        #  print(cur_frame_count)
+        print('frame:',cur_frame_count)
         for t in live_tracker:
-            print(t)
+            # print(t)
+            pass
         print('-'*5)
 
         #  break
@@ -207,7 +178,7 @@ while cap.isOpened():
     frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
 
     delta = cv2.absdiff(prev_frame, frame)
-    _,thresh = cv2.threshold(delta, 80, 255, cv2.THRESH_BINARY)
+    _,thresh = cv2.threshold(delta, 45, 255, cv2.THRESH_BINARY) #! 80-lower causes more noise
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
 
 
@@ -221,17 +192,19 @@ while cap.isOpened():
     #* cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
     # grouped_rects, weights = cv2.groupRectangles(rectangles, groupThreshold=2, eps=6)
 
-    objects = merge_contours(contours)
-
+    #* contourArea is used to filter out some white noise from thresh and camera
+    rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 25] #! 20
+    objects = merge_rectangles(rectangles)
     update_tracker(objects)
 
-    for (x, y, w, h) in objects:
+    for t in live_tracker:
+        x, y, w, h = t['box']
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        # if prev_objects:
+        cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 0, 0), 1)
         # cv2.line(orig_frame, (x,y), (prev_objects[0][0], prev_objects[0][1]), (255,0,0),2)
 
-    # cv2.imshow('thresh', thresh)
-    cv2.imshow(f'original - {recording_idx}', orig_frame)
+    cv2.imshow('thresh', thresh)
+    # cv2.imshow(f'original - {recording_idx}', orig_frame)
 
 
     prev_frame = frame
