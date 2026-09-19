@@ -3,4 +3,4 @@ todo:
 
 
 motion-detection.py
- - after obj leaves (shert)
+- #! use vectors to predict motion rather than just double loop?

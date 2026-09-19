@@ -113,6 +113,7 @@ def merge_rectangles(rects):
 
 # live_tracker = [{'uuid':'uuid()','TTL':15,'center':(0,0),'count':0, 'test':True}] #* frame nums?
 live_tracker=[]
+live_trace={}
 def update_tracker(objects, frame_num, tracker=live_tracker):
     #* remove expired trackers (save to db)
     for t in tracker:
@@ -123,15 +124,13 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
         # elif (t['last_frame'] - t['init_frame'] == 5) and (t['count'] <= 2):
         #     print(f"remove-{t['center']}-Noise")
         #     tracker.remove(t)
-
-
         # elif t['TTL'] < 50 and t['count'] < 3: #* temp to filter out noise
             # print(f"remove-{t['center']}")
             # tracker.remove(t)
 
     centers = [(x+w//2, y+h//2) for x,y,w,h in objects]
 
-    #! use vectors to predict motion rather than just double loop
+    #! use vectors to predict motion rather than just double loop?
     for i,center in enumerate(centers):
         center = np.array(center)
 
@@ -152,11 +151,13 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             trk['center'] = center
             trk['box'] = objects[i]
             trk['last_frame'] = frame_num
-            # centers.remove(center)
+            live_trace[trk['uuid']].append(center)
+
         else:
             #* new trackers
             new_obj = {'uuid':uuid4(),'TTL':ttl,'center':center,'box':objects[i],'count':1,'init_frame':frame_num,'last_frame':frame_num}
             tracker.append(new_obj)
+            live_trace[new_obj['uuid']] = [center,]
             print(f'new-{center}-{dist}')
 
 
@@ -185,6 +186,7 @@ while cap.isOpened():
         for t in live_tracker:
             print(t)
             pass
+        # print(live_trace)
         print('-'*5)
 
         #  break
