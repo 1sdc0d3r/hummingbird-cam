@@ -41,14 +41,18 @@ print(f'Frame count: {FRAME_COUNT:,}  |  Size: {FRAME_WIDTH}x{FRAME_HEIGHT}  |  
 rec = cv2.VideoWriter('./dataset/motion/file_name.mp4',cv2.VideoWriter_fourcc(*'mp4v'),FPS,(FRAME_WIDTH,FRAME_HEIGHT),True)
 
 
+def get_rec_center(x,y,w,h):
+    return (x+w//2, y+h//2)
 
-def merge_boxes(rects, grow=1):
-    grow /= 100
-    grow += 1 # grow 10%
+def merge_contours(rects=[], grow=1):
+    #* contourArea is used to filter out some white noise from thresh and camera
+    rects = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #!20
+    # grow /= 100
+    # grow += 1 # grow 10%
     #* boundingRec: x,y,w,h (top left corner, width, height)
     #* cv2 (0,0) coord is also top left
 
-    boxes = []
+    # boxes = []
     objects = []
 
     rects.sort(key=lambda r: (r[0]**2 + r[1]**2))
@@ -87,6 +91,7 @@ def merge_boxes(rects, grow=1):
             while len(items) > 1:
                 # c1 = items[len(centers)//2][0] #* may change to [0] over len, maybe mean?
                 c1 = items[0][0] #! seed needs to be changed, hmmmmm maybe item with std_dev of 0?
+                #* maybe use a seed from the prev frame??
 
                 group1,group2 = [],[]
                 for c,b in items:
@@ -105,10 +110,14 @@ def merge_boxes(rects, grow=1):
 # fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
 
 kernel = np.ones((4,4), np.uint8)
-prev_frame = cap.read()[1]
+prev_frame = cap.read()[1] #
 prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-prev_frame = cv2.erode(prev_frame, kernel)
-prev_frame = cv2.dilate(prev_frame,kernel,iterations=1)
+# prev_frame = cv2.erode(prev_frame, kernel)
+# prev_frame = cv2.dilate(prev_frame,kernel,iterations=1)
+prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_OPEN, kernel)
+
+prev_boxes = []
+
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -120,10 +129,10 @@ while cap.isOpened():
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
 
-
     delta = cv2.absdiff(prev_frame, frame)
     _,thresh = cv2.threshold(delta, 80, 255, cv2.THRESH_BINARY)
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
+
 
     # thresh = cv2.adaptiveThreshold(delta, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 9)
     # merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (40,40))
@@ -133,21 +142,31 @@ while cap.isOpened():
 
 
     #* cv2.drawContours(orig_frame, contours, -1, (0, 255, 0), 2)
-    #* contourArea is used to filter out some white noise from thresh and camera
-    rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #!20
 
     # grouped_rects, weights = cv2.groupRectangles(rectangles, groupThreshold=2, eps=6)
 
-    boxes = merge_boxes(rectangles)
+    boxes = merge_contours(contours)
     # if boxes: print(len(boxes),boxes)
+    # if boxes != prev_boxes:
+    print(boxes,prev_boxes)
+    for (x, y, w, h),(x1, y1, w1, h1) in zip(boxes, prev_boxes):
+        d = (x+w//2 + y+h//2)
+        d2 = (x1+w1//2 + y1+h1//2)
+        print(abs(d-d2))
+
+
 
     for (x, y, w, h) in boxes:
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        # if prev_boxes:
+        # cv2.line(orig_frame, (x,y), (prev_boxes[0][0], prev_boxes[0][1]), (255,0,0),2)
 
     # cv2.imshow('thresh', thresh)
     cv2.imshow('original', orig_frame)
 
-    prev_frame=frame
+
+    prev_frame = frame
+    if boxes: prev_boxes = boxes #for tracking when obj stops
 
     if RECORDER: rec.write(orig_frame)
     key = cv2.waitKey(max(1, int(1000/FPS))) & 0xFF
