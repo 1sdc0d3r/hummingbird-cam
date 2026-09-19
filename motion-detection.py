@@ -109,15 +109,44 @@ def merge_contours(rects=[], grow=1):
 # live_tracker = [{'uuid':'uuid()','TTL':15,'center':(0,0),'count':0, 'test':True}] #* frame nums?
 live_tracker=[]
 def update_tracker(new, tracker=live_tracker):
-    # print('-'*5)
-    # old_items = [((x+w//2, y+h//2), (x,y,w,h)) for x,y,w,h in old] #center and box
-    # items = [((x+w//2, y+h//2), (x,y,w,h)) for x,y,w,h in new] #! center and box ONLY CENTER?
     centers = [(x+w//2, y+h//2) for x,y,w,h in new]
-    # old_centers = [c for c,_ in old]
-    # print('new:', items)
-    # if not new: # no objects this frame
-    #     return
 
+    #! use vectors to predict motion rather than just double loop
+    for center in centers:
+        center = np.array(center)
+
+        trk = dict()
+        dist = -1
+        for t in tracker:
+            t_center = np.array(t.get('center')) #convert all code later
+            l2 = int(np.linalg.norm(center-t_center))
+            print('l2',l2)
+            if l2 < dist or dist == -1:
+                dist=l2
+                trk = t
+
+        if trk and dist < 50:
+            trk['TTL'] = 60
+            trk['count'] += 1
+            trk['center'] = center
+            # centers.remove(center)
+        else:
+            #* new trackers
+            new_obj = {'uuid':uuid4(),'TTL':60,'center':center,'count':1}
+            tracker.append(new_obj)
+            print(f'new-{center}')
+
+
+    #* remove expired trackers (save to db)
+    for t in tracker:
+        if t['TTL'] <= 0:
+            print(f"remove-{t['center']}")
+            tracker.remove(t)
+
+
+
+
+'''
     for t in tracker: #! don't do fcfs. check dist on every tracker first. swap centers and trackers. separate logic
         t['TTL'] -= 1
         for i, new_center in enumerate(centers.copy()):
@@ -126,8 +155,8 @@ def update_tracker(new, tracker=live_tracker):
             l2 = int(np.linalg.norm(new_center-t_center))
 
             # print(f't_center:{t_center} - new_center:{new_center} - l2: {l2}')
-            if l2 < 150:
-                t['TTL'] = 30
+            if l2 < 50:
+                t['TTL'] = 60
                 t['count'] += 1
                 t['center'] = new_center
                 centers.pop(i)
@@ -139,17 +168,11 @@ def update_tracker(new, tracker=live_tracker):
 
     #* new trackers
     for c in centers:
-        new_obj = {'uuid':uuid4(),'TTL':30,'center':c,'count':1}
+        new_obj = {'uuid':uuid4(),'TTL':60,'center':c,'count':1}
         tracker.append(new_obj)
         print(f'new-{c}')
 
-
-        # print('\n')
-    # for (x, y, w, h),(x1, y1, w1, h1) in zip(old, new):
-    #     d = (x+w//2 + y+h//2)
-    #     d2 = (x1+w1//2 + y1+h1//2)
-    #     print(abs(d-d2))
-
+'''
 
 #* didn't work well
 # fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
