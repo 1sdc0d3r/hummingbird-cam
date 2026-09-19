@@ -222,13 +222,16 @@ while cap.isOpened():
 
     for t in live_tracker:
         x, y, w, h = t['box']
+        #*frame,text,pos,font,fontScale,color,lineType
+        cv2.putText(orig_frame, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2) 
+        cv2.putText(thresh, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2) 
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
         cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 0, 0), 1)
         # cv2.line(orig_frame, (x,y), (prev_objects[0][0], prev_objects[0][1]), (255,0,0),2)
 
 #! IMSHOW
-    cv2.imshow('thresh', thresh)
-    # cv2.imshow(f'original - {recording_idx}', orig_frame)
+    # cv2.imshow('thresh', thresh)
+    cv2.imshow(f'original - {recording_idx}', orig_frame)
 
 
     prev_frame = frame
