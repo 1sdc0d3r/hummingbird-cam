@@ -46,6 +46,7 @@ print(f'Frame count: {FRAME_COUNT:,}  |  Size: {FRAME_WIDTH}x{FRAME_HEIGHT}  |  
 rec = cv2.VideoWriter('./dataset/motion/file_name.mp4',cv2.VideoWriter_fourcc(*'mp4v'),FPS,(FRAME_WIDTH,FRAME_HEIGHT),True)
 
 
+
 def merge_boxes(rects, grow=1):
     grow /= 100
     grow += 1 # grow 10%
@@ -78,33 +79,40 @@ def merge_boxes(rects, grow=1):
         # print(centers)
         avg_std = int(np.mean(np.std(centers,axis=0))) # (x,y)
 
-
-
         if avg_std < 50: #* single detection area
             # box = min(boxes, key=lambda b: (b[0], b[1])) # get most upper-left box
             objects.append(boxes[0]) #* normalize min box size (width/height)
         else:
-            # print(avg_std)
+            print(f'avg_std: {avg_std}')
+            # std_dev = np.std(centers,axis=0)
+            # mean = np.mean(centers,axis=0)
+            # z_scores = (centers-mean) / std_dev
+            # z_norm = np.linalg.norm(z_scores, axis=1)
+            group_obj = []
+            # dists = [int(np.linalg.norm(np.asarray(c) - np.asarray(c1))) for c in centers]
+            items = list(zip(centers, boxes))
+            while len(items) > 1:
+                # c1 = items[len(centers)//2][0] #* may change to [0] over len, maybe mean?
+                c1 = items[0][0]
 
-            std_dev = np.std(centers,axis=0)
-            mean = np.mean(centers,axis=0)
-            z_scores = (centers-mean) / std_dev
-            z_norm = np.linalg.norm(z_scores, axis=1)
-
-
-            # group1 = []
-            # group2 = []
-            # print(std_dev)
-            for c,z,b in zip(centers, z_norm, boxes):
-                print(c,z)
-                # if z < 2.2: group1.append(b)
-                # else: group2.append(b)
-                
-            # print(f'g1:{group1}\ng2:{group2}')
-            # objects.append(group1[0])
-            # objects.append(group2[0])
-            # pass
-
+                group1,group2 = [],[]
+                for c,b in items:
+                    dist = np.linalg.norm(np.asarray(c) - np.asarray(c1))
+                    # (group1 if dist < 150 else group2).append(c)
+                    if dist < 150:
+                        group1.append((c,b))
+                    else:
+                        group2.append((c,b))
+                if group1:
+                    group_obj.append(group1[0][1]) #* only 1 per group
+                items = group2
+            if items: #leftover after loop
+                group_obj.append(items[0][1])
+            # for g in group_obj:
+            #     # print('g:', g)
+            #     pass
+            objects = group_obj
+    # print(len(objects))
     return objects
 
 
@@ -168,8 +176,8 @@ while cap.isOpened():
         # if cv2.contourArea(c) > 50: #300
 
 
-    cv2.imshow('thresh', thresh)
-    # cv2.imshow('original', orig_frame)
+    # cv2.imshow('thresh', thresh)
+    cv2.imshow('original', orig_frame)
 
     prev_frame=frame
 
@@ -188,27 +196,3 @@ while cap.isOpened():
 
 cap.release()
 cv2.destroyAllWindows()
-
-
-def merge_rects(rects, pad=20):
-    boxes = [[x - pad, y - pad, x + w + pad, y + h + pad] for x, y, w, h in rects]
-    merged = True
-    while merged:
-        merged = False
-        out = []
-        while boxes:
-            a = boxes.pop()
-            ax1, ay1, ax2, ay2 = a
-            rest = []
-            for b in boxes:
-                bx1, by1, bx2, by2 = b
-                if ax1 <= bx2 and ax2 >= bx1 and ay1 <= by2 and ay2 >= by1:
-                    ax1, ay1 = min(ax1, bx1), min(ay1, by1)
-                    ax2, ay2 = max(ax2, bx2), max(ay2, by2)
-                    merged = True
-                else:
-                    rest.append(b)
-            boxes = rest
-            out.append([ax1, ay1, ax2, ay2])
-        boxes = out
-    return [(x1, y1, x2 - x1, y2 - y1) for x1, y1, x2, y2 in boxes]
