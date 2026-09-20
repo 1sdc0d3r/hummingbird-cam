@@ -107,8 +107,7 @@ def get_max_box(items):
 
 def get_box_size(item):
     x,y,w,h = item
-    return w*h 
-
+    return (w,h)
 
 
 def merge_rectangles(rects):
@@ -186,9 +185,9 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             #* use predictive tracker on non-feeder areas
             t_center = np.array(t['center'])
             s = np.linalg.norm(center-t_center) if by_feeder(center) else np.linalg.norm(center-t['prediction'])
-            if s < score:
+            if s < score or score == -1:
                 trk = t
-                score=s
+                score = s
 
         # err_center,err_pred = int(dist),int(low_pred)
         # diff = err_center-err_pred
@@ -202,7 +201,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             trk['last_frame'] = frame_num
             trk['trace'].append(center)
             trk['box_sizes'].append(get_box_size(objects[i])) #! this is wrong <-- get_box_size. this is where you start next... store w,h separate (not just area)
-            trk['box_size_avg'] = np.avg(trk['box_sizes'])
+            trk['box_size_avg'] = np.mean(trk['box_sizes'], axis=0)
             trk['by_feeder'] = by_feeder(center)
 
             #* vector math
@@ -214,6 +213,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             trk['velocity'] = velocity
             trk['prediction'] = center + velocity
             # print(f"{str(trk['uuid'])[-4:]} <{velocity},{magnitude}>")
+            #? direction? L/R for cars? extract later from data or 
             if LIVE_GRAPH:
                 # each frame when you print a vector
                 tid = str(trk['uuid'])[-3:]
@@ -264,16 +264,11 @@ while cap.isOpened():
 
     cur_frame_count = cap.get(cv2.CAP_PROP_POS_FRAMES)
     if cur_frame_count % 10 == 0:
+        # print('-'*5)
         # print('frame:',cur_frame_count)
         for t in live_tracker:
             # print(t)
             pass
-        # print('-'*5)
-
-        #  break
-    # if cur_frame_count > 500:
-    #     print(live_tracker)
-    #     break
 
     orig_frame = frame.copy()
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -309,10 +304,8 @@ while cap.isOpened():
 
     objects = merge_rectangles(rectangles)
     update_tracker(objects,cur_frame_count)
-    print('*'*5)
     #! PRINT OBJ RECTANGLES
     for t in live_tracker:
-        print(t)
         if t['count'] < 4: continue #* filters out some noisy trackers - run ttl down
         x, y, w, h = t['box']
         #*frame,text,pos,font,fontScale,color,lineType
