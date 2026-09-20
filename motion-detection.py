@@ -26,13 +26,13 @@ RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 RECORDINGS.insert(0, './dataset/motion/cars.MP4')
 RECORDINGS.insert(0, './dataset/motion/truck1.MP4')
-recording_idx=0 #10
 FEEDER = (75,325,200,125) # [75:275, 325:450]
 
 LIVE = False
 RECORDER = False
 LIVE_GRAPH = False
-SKIP_FRAMES=False or True
+SKIP_FRAMES=False 
+recording_idx=0 #10
 
 
 if not LIVE_GRAPH: plt.close('all')
@@ -42,6 +42,7 @@ def capture():
     if LIVE:
         return cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
     else:
+        cv2.destroyAllWindows()
         c = cv2.VideoCapture(RECORDINGS[recording_idx])
         # c = cv2.VideoCapture('./dataset/motion/cars.MP4')
         recording_idx+=1
@@ -86,10 +87,10 @@ def by_feeder(center):
     return x <= cx < x + w and y <= cy < y + h
 
 #* normalize min box size (width/height)
-def set_min_box(item):
+def set_min_box(item,m=25):
     x = list(item)
-    if x[2] < 20: x[2]=20
-    if x[3] < 20: x[3]=20
+    if x[2] < m: x[2]=m
+    if x[3] < m: x[3]=m
     return x
 
 def get_max_box(items):
@@ -98,10 +99,7 @@ def get_max_box(items):
     y=min(b[1] for b in boxes)
     x2=max(b[0]+b[2] for b in boxes)
     y2=max(b[1]+b[3] for b in boxes)
-    return (x,y,x2,y2)
-
-
-
+    return set_min_box((x,y,x2-x,y2-y))
 
 
 def merge_rectangles(rects):
@@ -117,9 +115,11 @@ def merge_rectangles(rects):
         avg_std = np.mean(np.std(centers,axis=0)) # (x,y)
         # print(items,avg_std)
         # print(centers, np.std(centers, ddof=1))
-        if avg_std < 50: #* single detection area
-            # objects.append(items[len(items)//2][1])
-            obj = set_min_box(items[0][1])
+        if avg_std < 50: #* single detection area # 50
+            center_mean = np.mean(centers, axis=0)
+            i = np.argmin(np.linalg.norm(centers-center_mean, axis=1))
+            obj = get_max_box(items)
+            # obj = set_min_box(items[i][1])
             objects.append(obj)
         else:
             # print('avg',avg_std)
@@ -130,19 +130,20 @@ def merge_rectangles(rects):
             # z_norm = np.linalg.norm(z_scores, axis=1)
             # dists = [int(np.linalg.norm(np.asarray(c) - np.asarray(c1))) for c in centers]
 
-            print('*'*5)
+            # print('*'*5)
             while len(items) > 1:
                 centers = [c for c,_ in items]
                 # print(centers,avg_std)
                 # print(centers, np.mean(np.std(centers, ddof=0,axis=0)))
-                center_mean = np.mean(np.linalg.norm(centers, axis=1))
-                i = np.argmin(np.linalg.norm(centers, axis=1) - center_mean)
+                # center_mean = np.mean(np.linalg.norm(centers, axis=1))
+                center_mean = np.mean(centers, axis=0)
+                i = np.argmin(np.linalg.norm(centers-center_mean, axis=1))
                 seed = items[i]
 
                 group1,group2 = [],[]
                 for c,b in items:
                     dist = np.linalg.norm(np.asarray(c) - np.asarray(seed[0]))
-                    (group1 if dist < 80 else group2).append((c,b)) #150,80
+                    (group1 if dist < 60 else group2).append((c,b)) #! 150,80(good)
 
                 # objects.append(get_max_box(group1))
                 objects.append(set_min_box(seed[1])) #* only 1 box per group (c1 seed)
@@ -150,7 +151,6 @@ def merge_rectangles(rects):
                 items = group2
             if items: #leftover after loop
                 objects.append(set_min_box(items[0][1]))
-    # print(len(objects))
     return objects
 
 
@@ -272,7 +272,7 @@ while cap.isOpened():
 
     frame = cv2.morphologyEx(frame,cv2.MORPH_CLOSE, kernel)
     delta = cv2.absdiff(prev_frame, frame)
-    _,thresh = cv2.threshold(delta, 60, 255, cv2.THRESH_BINARY) #! 80-lower causes more noise
+    _,thresh = cv2.threshold(delta, 50, 255, cv2.THRESH_BINARY) #! 60-lower causes more noise
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
 
     # thresh = cv2.adaptiveThreshold(delta, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 9)
@@ -286,7 +286,7 @@ while cap.isOpened():
     # grouped_rects, weights = cv2.groupRectangles(rectangles, groupThreshold=2, eps=6)
 
     #* contourArea is used to filter out some white noise from thresh and camera
-    rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 30] #! 20
+    rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #! 20
     for (x,y,w,h) in rectangles:
         cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 1)
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (255, 255, 0), 1)
@@ -302,7 +302,7 @@ while cap.isOpened():
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
         cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 2)
 #! IMSHOW
-    # cv2.imshow('thresh', thresh)
+    # cv2.imshow(f'thresh - {recording_idx}', thresh)
     cv2.imshow(f'original - {recording_idx}', orig_frame)
 
     prev_frame = frame
@@ -312,8 +312,7 @@ while cap.isOpened():
     if key == ord('n'):
         # recording_idx+=1
         cap.release()
-        cv2.destroyAllWindows()
-        cap=capture()
+        cap = capture()
         prev_frame = cap.read()[1]
         prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
         hist.clear()
