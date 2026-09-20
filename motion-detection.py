@@ -1,3 +1,4 @@
+import sys
 import os
 for _flag in ("QWEN_2_5_ENABLED",
     "QWEN_3_ENABLED",
@@ -16,7 +17,7 @@ from matplotlib import pyplot as plt
 
 plt.ion()
 fig, ax = plt.subplots()
-hist = {} 
+hist = {}
 
 #todo convert to full numpy for speed
 #? keep consistent w/h sizes? only use center or x/y?
@@ -24,11 +25,17 @@ hist = {}
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 RECORDINGS.insert(0, './dataset/motion/cars.MP4')
-recording_idx=10 #10
+RECORDINGS.insert(0, './dataset/motion/truck1.MP4')
+recording_idx=0 #10
 FEEDER = (75,325,200,125) # [75:275, 325:450]
 
-LIVE = True
+LIVE = False
 RECORDER = False
+LIVE_GRAPH = False
+SKIP_FRAMES=False or True
+
+
+if not LIVE_GRAPH: plt.close('all')
 
 def capture():
     global recording_idx
@@ -46,7 +53,8 @@ FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) # 1920x1080
 FPS = int(cap.get(cv2.CAP_PROP_FPS))
 print(f'Frame count: {FRAME_COUNT:,}  |  Size: {FRAME_WIDTH}x{FRAME_HEIGHT}  |  FPS: {FPS}')
-rec = cv2.VideoWriter('./dataset/motion/file_name.mp4',cv2.VideoWriter_fourcc(*'mp4v'),FPS,(FRAME_WIDTH,FRAME_HEIGHT),True)
+rec_path = f'./dataset/vectors/{dt.now()}'
+rec = cv2.VideoWriter(f'{rec_path}/recording.mp4',cv2.VideoWriter_fourcc(*'mp4v'),FPS,(FRAME_WIDTH,FRAME_HEIGHT),True)
 
 def get_rec_center(x,y,w,h):
     return (x+w//2, y+h//2)
@@ -77,6 +85,25 @@ def by_feeder(center):
     cx, cy = center
     return x <= cx < x + w and y <= cy < y + h
 
+#* normalize min box size (width/height)
+def set_min_box(item):
+    x = list(item)
+    if x[2] < 20: x[2]=20
+    if x[3] < 20: x[3]=20
+    return x
+
+def get_max_box(items):
+    boxes = [b for _,b in items]
+    x=min(b[0] for b in boxes)
+    y=min(b[1] for b in boxes)
+    x2=max(b[0]+b[2] for b in boxes)
+    y2=max(b[1]+b[3] for b in boxes)
+    return (x,y,x2,y2)
+
+
+
+
+
 def merge_rectangles(rects):
     #* boundingRec: x,y,w,h (top left corner, width, height)
     #* cv2 (0,0) coord is also top left
@@ -87,32 +114,42 @@ def merge_rectangles(rects):
         # items = list(zip(centers, boxes))
         items = [((x+w//2, y+h//2), (x,y,w,h)) for x,y,w,h in rects] #center and box
         centers = [c for c,_ in items]
-        avg_std = int(np.mean(np.std(centers,axis=0))) # (x,y)
+        avg_std = np.mean(np.std(centers,axis=0)) # (x,y)
+        # print(items,avg_std)
+        # print(centers, np.std(centers, ddof=1))
         if avg_std < 50: #* single detection area
-            objects.append(items[0][1]) #* normalize min box size (width/height)
+            # objects.append(items[len(items)//2][1])
+            obj = set_min_box(items[0][1])
+            objects.append(obj)
         else:
             # print('avg',avg_std)
             # print(f'avg_std: {avg_std}')
             # std_dev = np.std(centers,axis=0)
             # mean = np.mean(centers,axis=0)
-            # z_scores = (centers-mean) / std_dev
+            # z_scores = (centers-mean) / std_devqq
             # z_norm = np.linalg.norm(z_scores, axis=1)
             # dists = [int(np.linalg.norm(np.asarray(c) - np.asarray(c1))) for c in centers]
 
+            print('*'*5)
             while len(items) > 1:
-                # c1 = items[len(centers)//2][0] #* may change to [0] over len, maybe mean?
-                c1 = items[0][0] #! seed needs to be changed, hmmmmm maybe item with std_dev of 0?
-                #* maybe use a seed from the prev frame??
+                centers = [c for c,_ in items]
+                # print(centers,avg_std)
+                # print(centers, np.mean(np.std(centers, ddof=0,axis=0)))
+                center_mean = np.mean(np.linalg.norm(centers, axis=1))
+                i = np.argmin(np.linalg.norm(centers, axis=1) - center_mean)
+                seed = items[i]
 
                 group1,group2 = [],[]
                 for c,b in items:
-                    dist = np.linalg.norm(np.asarray(c) - np.asarray(c1))
-                    (group1 if dist < 150 else group2).append((c,b))
-                if group1:
-                    objects.append(group1[0][1]) #* only 1 box per group
+                    dist = np.linalg.norm(np.asarray(c) - np.asarray(seed[0]))
+                    (group1 if dist < 80 else group2).append((c,b)) #150,80
+
+                # objects.append(get_max_box(group1))
+                objects.append(set_min_box(seed[1])) #* only 1 box per group (c1 seed)
+
                 items = group2
             if items: #leftover after loop
-                objects.append(items[0][1])
+                objects.append(set_min_box(items[0][1]))
     # print(len(objects))
     return objects
 
@@ -142,7 +179,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
         dist = -1
         for t in tracker:
             t_center = np.array(t.get('center')) #convert all code later to np
-            l2 = int(np.linalg.norm(center-t_center))
+            l2 = np.linalg.norm(center-t_center)
             if l2 < dist or dist == -1:
                 dist=l2
                 trk = t
@@ -157,22 +194,24 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             trk['last_frame'] = frame_num
             trk['trace'].append(center)
 
-            a = trk['vector']
-            b = center
-            deg = np.arccos(np.dot(a,b)/(np.linalg.norm(a)*np.linalg.norm(b)))
+            #! this vector math is all off
+            a = trk['init_center'] # growing magnitude as leaves origin point
+            a = trk['trace'][-2] # prev
+            b = center # curr
+            # deg = np.arccos(np.dot(a,b)/(np.linalg.norm(a)*np.linalg.norm(b))) #* from (0,0)
+            velocity = b-a
             magnitude = np.linalg.norm(b-a)
-            # print(f"{str(trk['uuid'])[-1:-4:-1]} <{deg},{magnitude}>")
-
-            # each frame when you print a vector
-            tid = str(trk['uuid'])[-3:]
-            hist.setdefault(tid, []).append(magnitude)
-            ax.cla()
-            for k, v in hist.items():
-                ax.plot(v, 'o-', label=k, markersize=3)
-            ax.legend(loc='best', fontsize=8)
-            ax.set_ylabel('magnitude')
-            plt.pause(0.001)
-
+            # print(f"{str(trk['uuid'])[-4:]} <{velocity},{magnitude}>")
+            if LIVE_GRAPH:
+                # each frame when you print a vector
+                tid = str(trk['uuid'])[-3:]
+                hist.setdefault(tid, []).append(magnitude)
+                ax.cla()
+                for k, v in hist.items():
+                    ax.plot(v, 'o-', label=k, markersize=3)
+                ax.legend(loc='best', fontsize=8)
+                ax.set_ylabel('magnitude')
+                plt.pause(0.001)
 
         else:
             #* new trackers
@@ -180,12 +219,13 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
                 'uuid':uuid4(),
                 'TTL':ttl,
                 'center':center,
+                'init_center':center,
                 'box':objects[i],
                 'count':1,
                 'init_frame':frame_num,
                 'last_frame':frame_num,
                 'trace':[center],
-                'vector': center}
+                'vector': ()}
             tracker.append(new_obj)
             # print(f'new-{center}-{dist}')
 
@@ -197,12 +237,12 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
 # fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
 
 kernel = np.ones((3,3), np.uint8) #* ODD (1 in None)
-prev_frame = cap.read()[1] #
-# prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+prev_frame = cap.read()[1]
+prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
 # prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_OPEN, kernel)
 # prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_CLOSE, kernel)
 
-# cap.set(cv2.CAP_PROP_POS_FRAMES, 140)
+if SKIP_FRAMES: cap.set(cv2.CAP_PROP_POS_FRAMES, 160)
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
@@ -226,14 +266,15 @@ while cap.isOpened():
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
 
-    if cur_frame_count in (1,2): 
+    if cur_frame_count < 4:
         prev_frame = frame
         continue
 
-    # frame = cv2.morphologyEx(frame,cv2.MORPH_CLOSE, kernel) # erode and dilate together (removes noise)
+    frame = cv2.morphologyEx(frame,cv2.MORPH_CLOSE, kernel)
     delta = cv2.absdiff(prev_frame, frame)
     _,thresh = cv2.threshold(delta, 60, 255, cv2.THRESH_BINARY) #! 80-lower causes more noise
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
+
     # thresh = cv2.adaptiveThreshold(delta, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 9)
     # merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (40,40))
     # thresh = cv2.morphologyEx(thresh,cv2.MORPH_CLOSE, merge_kernel) #* too slow (with merge_kernel)
@@ -246,6 +287,9 @@ while cap.isOpened():
 
     #* contourArea is used to filter out some white noise from thresh and camera
     rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 30] #! 20
+    for (x,y,w,h) in rectangles:
+        cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 1)
+        cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (255, 255, 0), 1)
     objects = merge_rectangles(rectangles)
     # if cur_frame_count > 145: update_tracker(objects) # init flash of changes
     update_tracker(objects,cur_frame_count)
@@ -256,24 +300,30 @@ while cap.isOpened():
         cv2.putText(orig_frame, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
         cv2.putText(thresh, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 0, 0), 1)
+        cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 2)
 #! IMSHOW
     # cv2.imshow('thresh', thresh)
     cv2.imshow(f'original - {recording_idx}', orig_frame)
 
     prev_frame = frame
-    if RECORDER: rec.write(orig_frame)
+    if RECORDER: rec.write(orig_frame) #record thresh too
+
     key = cv2.waitKey(max(1, int(1000/FPS))) & 0xFF
     if key == ord('n'):
-        recording_idx+=1
+        # recording_idx+=1
         cap.release()
         cv2.destroyAllWindows()
         cap=capture()
+        prev_frame = cap.read()[1]
+        prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+        hist.clear()
     # if key == ord('f'):
     #     cur_frame_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
     #     np.savetxt(f'./dataset/motion/delta/frame_delta_{cur_frame_pos}.csv', delta, delimiter=',', fmt='%d')
     if key == ord('q'):
+        if RECORDER: plt.savefig(f'{rec_path}/graph.png') #? on next?
         break
 
 cap.release()
 cv2.destroyAllWindows()
+plt.clear('all')
