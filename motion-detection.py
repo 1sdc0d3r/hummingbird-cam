@@ -105,6 +105,11 @@ def get_max_box(items):
     y2=max(b[1]+b[3] for b in boxes)
     return set_min_box((x,y,x2-x,y2-y))
 
+def get_box_size(item):
+    x,y,w,h = item
+    return w*h 
+
+
 
 def merge_rectangles(rects):
     #* boundingRec: x,y,w,h (top left corner, width, height)
@@ -168,13 +173,13 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
 
     centers = [(x+w//2, y+h//2) for x,y,w,h in objects]
 
-    #! use vectors to predict motion rather than just double loop?
     #! find the mean size of object for consistent size (truck behind pillar, ect)
     #! do I care about speed across skipped frames? last_frame-cur_frame in trk so velocity per frame?
     #! clear out noisy trackers
-    #! track accuracy (report on q) FP count
+    #! track accuracy (report on q) FP count, comp of alg used
     for i,center in enumerate(centers):
         center = np.array(center)
+        ttl = FPS*5 if by_feeder(center) else FPS//2 #* birds sitting or hovering so dont use pred alg
         trk = dict()
         score = -1
         for t in tracker:
@@ -185,33 +190,20 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
                 trk = t
                 score=s
 
-            # if by_feeder(center):
-                # t_center = np.array(t['center'])
-                # l2 = np.linalg.norm(center-t_center)
-                # if l2 < score or score == -1:
-                # trk = t
-                # score=l2
-            # else:
-            #     pred = np.linalg.norm(center-t['prediction'])
-            #     if pred < score  or score == -1:
-            #         trk = t
-            #         score = pred
-
         # err_center,err_pred = int(dist),int(low_pred)
         # diff = err_center-err_pred
         # print(trk is t2, err_center, err_pred, diff)
 
-        ttl = FPS*5 if by_feeder(center) else FPS//2 #birds sitting or hovering #! updated camera pos, new roi
-        # if trk and dist < 200: #! reduce val as acc inc
-        # trk, dist = t2, low_pred  #* for using prediction over centroid dist
-
-        if trk and score < 200:
+        if trk and score < 200: #! reduce val as acc inc
             trk['TTL'] = ttl
             trk['count'] += 1
             trk['center'] = center
             trk['box'] = objects[i]
             trk['last_frame'] = frame_num
             trk['trace'].append(center)
+            trk['box_sizes'].append(get_box_size(objects[i])) #! this is wrong <-- get_box_size. this is where you start next... store w,h separate (not just area)
+            trk['box_size_avg'] = np.avg(trk['box_sizes'])
+            trk['by_feeder'] = by_feeder(center)
 
             #* vector math
             a = trk['init_center'] # growing magnitude as leaves origin point
@@ -245,7 +237,11 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
                 'init_frame':frame_num,
                 'last_frame':frame_num,
                 'trace':[center],
-                'prediction': center,}
+                'box_sizes': [get_box_size(objects[i])],
+                'box_size_avg': get_box_size(objects[i]),#* changes to numpy later, db issue?
+                'prediction': center,
+                'by_feeder': by_feeder(center), #nice to have for the db
+                }
             tracker.append(new_obj)
             # print(f'new-{center}-{dist}')
 
