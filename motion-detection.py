@@ -23,9 +23,11 @@ graph_hist = {}
 #? keep consistent w/h sizes? only use center or x/y?
 
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
-RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
-RECORDINGS.insert(0, './dataset/motion/cars.MP4')
-RECORDINGS.insert(0, './dataset/motion/truck1.MP4')
+RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix in ('.mp4','.MP4','.mov'))
+RECORDINGS[:0] = [f for f in Path('./dataset/motion').iterdir() if f.suffix in ('.mp4','.MP4','.mov')]
+# RECORDINGS.extend(sorted(f for f in Path('./dataset/motion').iterdir() if f.suffix in ('.mp4','.MP4','.mov')))
+# RECORDINGS.insert(0, './dataset/motion/cars.MP4')
+# RECORDINGS.insert(0, './dataset/motion/truck1.MP4')
 FEEDER = (120,650,280,130) # [120:400, 650:780]
 FEEDER2 = (75,200,325,125) #[75:275, 325:450]
 
@@ -176,6 +178,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
     #! do I care about speed across skipped frames? last_frame-cur_frame in trk so velocity per frame?
     #! clear out noisy trackers
     #! track accuracy (report on q) FP count, comp of alg used
+    #! boxes still up after off camera (fix)
     for i,center in enumerate(centers):
         center = np.array(center)
         ttl = FPS*5 if by_feeder(center) else FPS//2 #* birds sitting or hovering so dont use pred alg
@@ -201,7 +204,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             trk['last_frame'] = frame_num
             trk['trace'].append(center)
             trk['box_sizes'].append(get_box_size(objects[i])) #! this is wrong <-- get_box_size. this is where you start next... store w,h separate (not just area)
-            trk['box_size_avg'] = np.mean(trk['box_sizes'], axis=0)
+            trk['box_size_avg'] = np.mean(trk['box_sizes'], axis=0).astype(int).tolist()
             trk['by_feeder'] = by_feeder(center)
 
             #* vector math
@@ -213,7 +216,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             trk['velocity'] = velocity
             trk['prediction'] = center + velocity
             # print(f"{str(trk['uuid'])[-4:]} <{velocity},{magnitude}>")
-            #? direction? L/R for cars? extract later from data or 
+            #? direction? L/R for cars? extract later from data or..
             if LIVE_GRAPH:
                 # each frame when you print a vector
                 tid = str(trk['uuid'])[-3:]
@@ -238,7 +241,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
                 'last_frame':frame_num,
                 'trace':[center],
                 'box_sizes': [get_box_size(objects[i])],
-                'box_size_avg': get_box_size(objects[i]),#* changes to numpy later, db issue?
+                'box_size_avg': get_box_size(objects[i]),#* changes to numpy later, db issue? needed,hmm
                 'prediction': center,
                 'by_feeder': by_feeder(center), #nice to have for the db
                 }
@@ -247,7 +250,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
 
 
 #* didn't work well
-# fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
+fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
 
 kernel = np.ones((3,3), np.uint8) #* ODD (1 in None)
 prev_frame = cap.read()[1]
@@ -272,12 +275,12 @@ while cap.isOpened():
 
     orig_frame = frame.copy()
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
 
-    if cur_frame_count < 4:
+    if cur_frame_count < 4: # stops recordings from delta changes
         prev_frame = frame
         continue
 
+    frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
     frame = cv2.morphologyEx(frame,cv2.MORPH_CLOSE, kernel)
     delta = cv2.absdiff(prev_frame, frame)
     _,thresh = cv2.threshold(delta, 50, 255, cv2.THRESH_BINARY) #! 60-lower causes more noise
@@ -308,6 +311,8 @@ while cap.isOpened():
     for t in live_tracker:
         if t['count'] < 4: continue #* filters out some noisy trackers - run ttl down
         x, y, w, h = t['box']
+        # w,h = t['box_size_avg']
+
         #*frame,text,pos,font,fontScale,color,lineType
         cv2.putText(orig_frame, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
         cv2.putText(thresh, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
