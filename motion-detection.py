@@ -26,7 +26,8 @@ RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
 RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix == '.mp4')
 RECORDINGS.insert(0, './dataset/motion/cars.MP4')
 RECORDINGS.insert(0, './dataset/motion/truck1.MP4')
-FEEDER = (75,325,200,125) # [75:275, 325:450]
+FEEDER = (120,650,280,130) # [120:400, 650:780]
+FEEDER2 = (75,200,325,125) #[75:275, 325:450]
 
 LIVE = False
 RECORDER = False
@@ -84,8 +85,10 @@ def grow_rectangles(rects, grow=1):
 
 def by_feeder(center):
     x, y, w, h = FEEDER
+    x1, y1, w1, h1 = FEEDER2
+
     cx, cy = center
-    return x <= cx < x + w and y <= cy < y + h
+    return (x <= cx < x + w and y <= cy < y + h) or (x1 <= cx < x1 + w1 and y1 <= cy < y1 + h1)
 
 #* normalize min box size (width/height)
 def set_min_box(item,m=25):
@@ -169,24 +172,30 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
     #! find the mean size of object for consistent size (truck behind pillar, ect)
     #! do I care about speed across skipped frames? last_frame-cur_frame in trk so velocity per frame?
     #! clear out noisy trackers
-    #! use prediction on cars - use dist on feeder area
+    #! track accuracy (report on q) FP count
     for i,center in enumerate(centers):
         center = np.array(center)
-
         trk = dict()
-        dist = -1
-        t2 = dict()
-        low_pred=-1
+        score = -1
         for t in tracker:
-            t_center = np.array(t.get('center'))
-            l2 = np.linalg.norm(center-t_center)
-            if l2 < dist or dist == -1:
-                dist=l2
+            #* use predictive tracker on non-feeder areas
+            t_center = np.array(t['center'])
+            s = np.linalg.norm(center-t_center) if by_feeder(center) else np.linalg.norm(center-t['prediction'])
+            if s < score:
                 trk = t
-            pred = np.linalg.norm(center-t['prediction'])
-            if pred < low_pred  or low_pred == -1:
-                low_pred = pred
-                t2 = t
+                score=s
+
+            # if by_feeder(center):
+                # t_center = np.array(t['center'])
+                # l2 = np.linalg.norm(center-t_center)
+                # if l2 < score or score == -1:
+                # trk = t
+                # score=l2
+            # else:
+            #     pred = np.linalg.norm(center-t['prediction'])
+            #     if pred < score  or score == -1:
+            #         trk = t
+            #         score = pred
 
         # err_center,err_pred = int(dist),int(low_pred)
         # diff = err_center-err_pred
@@ -196,7 +205,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
         # if trk and dist < 200: #! reduce val as acc inc
         # trk, dist = t2, low_pred  #* for using prediction over centroid dist
 
-        if trk and dist < 200:
+        if trk and score < 200:
             trk['TTL'] = ttl
             trk['count'] += 1
             trk['center'] = center
@@ -236,12 +245,9 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
                 'init_frame':frame_num,
                 'last_frame':frame_num,
                 'trace':[center],
-                'prediction': center}
+                'prediction': center,}
             tracker.append(new_obj)
             # print(f'new-{center}-{dist}')
-
-
-
 
 
 #* didn't work well
@@ -285,6 +291,7 @@ while cap.isOpened():
     delta = cv2.absdiff(prev_frame, frame)
     _,thresh = cv2.threshold(delta, 50, 255, cv2.THRESH_BINARY) #! 60-lower causes more noise
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
+    # orig_frame[120:400, 650:780] = 0 #FEEDER
 
     # thresh = cv2.adaptiveThreshold(delta, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 9)
     # merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (40,40))
@@ -305,11 +312,11 @@ while cap.isOpened():
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (255, 255, 0), 1)
 
     objects = merge_rectangles(rectangles)
-    # if cur_frame_count > 145: update_tracker(objects) # init flash of changes
     update_tracker(objects,cur_frame_count)
-
+    print('*'*5)
     #! PRINT OBJ RECTANGLES
     for t in live_tracker:
+        print(t)
         if t['count'] < 4: continue #* filters out some noisy trackers - run ttl down
         x, y, w, h = t['box']
         #*frame,text,pos,font,fontScale,color,lineType
