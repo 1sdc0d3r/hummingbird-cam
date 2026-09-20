@@ -17,7 +17,7 @@ from matplotlib import pyplot as plt
 
 plt.ion()
 fig, ax = plt.subplots()
-hist = {}
+graph_hist = {}
 
 #todo convert to full numpy for speed
 #? keep consistent w/h sizes? only use center or x/y?
@@ -31,14 +31,14 @@ FEEDER = (75,325,200,125) # [75:275, 325:450]
 LIVE = False
 RECORDER = False
 LIVE_GRAPH = False
-SKIP_FRAMES=False 
+SKIP_FRAMES=False
 recording_idx=0 #10
 
 
 if not LIVE_GRAPH: plt.close('all')
 
 def capture():
-    global recording_idx
+    global recording_idx,graph_hist
     if LIVE:
         return cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
     else:
@@ -46,6 +46,7 @@ def capture():
         c = cv2.VideoCapture(RECORDINGS[recording_idx])
         # c = cv2.VideoCapture('./dataset/motion/cars.MP4')
         recording_idx+=1
+        graph_hist = {}
         return c
 
 cap = capture()
@@ -160,33 +161,42 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
     for t in tracker:
         t['TTL'] -= 1
         if t['TTL'] <= 0:
-            # print(f"remove-{t['center']}")
             tracker.remove(t)
-        # elif (t['last_frame'] - t['init_frame'] == 5) and (t['count'] <= 2):
-        #     print(f"remove-{t['center']}-Noise")
-        #     tracker.remove(t)
-        # elif t['TTL'] < 50 and t['count'] < 3: #* temp to filter out noise
-            # print(f"remove-{t['center']}")
-            # tracker.remove(t)
 
     centers = [(x+w//2, y+h//2) for x,y,w,h in objects]
 
     #! use vectors to predict motion rather than just double loop?
+    #! find the mean size of object for consistent size (truck behind pillar, ect)
+    #! do I care about speed across skipped frames? last_frame-cur_frame in trk so velocity per frame?
+    #! clear out noisy trackers
+    #! use prediction on cars - use dist on feeder area
     for i,center in enumerate(centers):
         center = np.array(center)
 
         trk = dict()
         dist = -1
+        t2 = dict()
+        low_pred=-1
         for t in tracker:
-            t_center = np.array(t.get('center')) #convert all code later to np
+            t_center = np.array(t.get('center'))
             l2 = np.linalg.norm(center-t_center)
             if l2 < dist or dist == -1:
                 dist=l2
                 trk = t
+            pred = np.linalg.norm(center-t['prediction'])
+            if pred < low_pred  or low_pred == -1:
+                low_pred = pred
+                t2 = t
 
-        ttl = FPS*5 if by_feeder(center) else FPS #birds sitting or hovering
+        # err_center,err_pred = int(dist),int(low_pred)
+        # diff = err_center-err_pred
+        # print(trk is t2, err_center, err_pred, diff)
+
+        ttl = FPS*5 if by_feeder(center) else FPS//2 #birds sitting or hovering #! updated camera pos, new roi
+        # if trk and dist < 200: #! reduce val as acc inc
+        # trk, dist = t2, low_pred  #* for using prediction over centroid dist
+
         if trk and dist < 200:
-            # print(dist)
             trk['TTL'] = ttl
             trk['count'] += 1
             trk['center'] = center
@@ -194,20 +204,21 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             trk['last_frame'] = frame_num
             trk['trace'].append(center)
 
-            #! this vector math is all off
+            #* vector math
             a = trk['init_center'] # growing magnitude as leaves origin point
             a = trk['trace'][-2] # prev
-            b = center # curr
-            # deg = np.arccos(np.dot(a,b)/(np.linalg.norm(a)*np.linalg.norm(b))) #* from (0,0)
+            b = center # current
             velocity = b-a
-            magnitude = np.linalg.norm(b-a)
+            magnitude = np.linalg.norm(velocity)
+            trk['velocity'] = velocity
+            trk['prediction'] = center + velocity
             # print(f"{str(trk['uuid'])[-4:]} <{velocity},{magnitude}>")
             if LIVE_GRAPH:
                 # each frame when you print a vector
                 tid = str(trk['uuid'])[-3:]
-                hist.setdefault(tid, []).append(magnitude)
+                graph_hist.setdefault(tid, []).append(magnitude)
                 ax.cla()
-                for k, v in hist.items():
+                for k, v in graph_hist.items():
                     ax.plot(v, 'o-', label=k, markersize=3)
                 ax.legend(loc='best', fontsize=8)
                 ax.set_ylabel('magnitude')
@@ -225,7 +236,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
                 'init_frame':frame_num,
                 'last_frame':frame_num,
                 'trace':[center],
-                'vector': ()}
+                'prediction': center}
             tracker.append(new_obj)
             # print(f'new-{center}-{dist}')
 
@@ -287,14 +298,19 @@ while cap.isOpened():
 
     #* contourArea is used to filter out some white noise from thresh and camera
     rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #! 20
+
+    #! PRINT ALL RECTANGLES - mini
     for (x,y,w,h) in rectangles:
         cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 1)
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (255, 255, 0), 1)
+
     objects = merge_rectangles(rectangles)
     # if cur_frame_count > 145: update_tracker(objects) # init flash of changes
     update_tracker(objects,cur_frame_count)
 
+    #! PRINT OBJ RECTANGLES
     for t in live_tracker:
+        if t['count'] < 4: continue #* filters out some noisy trackers - run ttl down
         x, y, w, h = t['box']
         #*frame,text,pos,font,fontScale,color,lineType
         cv2.putText(orig_frame, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
@@ -315,7 +331,7 @@ while cap.isOpened():
         cap = capture()
         prev_frame = cap.read()[1]
         prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-        hist.clear()
+        graph_hist.clear()
     # if key == ord('f'):
     #     cur_frame_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
     #     np.savetxt(f'./dataset/motion/delta/frame_delta_{cur_frame_pos}.csv', delta, delimiter=',', fmt='%d')
@@ -325,4 +341,4 @@ while cap.isOpened():
 
 cap.release()
 cv2.destroyAllWindows()
-plt.clear('all')
+plt.close('all')
