@@ -35,7 +35,7 @@ LIVE = False
 RECORDER = False
 LIVE_GRAPH = False
 SKIP_FRAMES=False
-recording_idx=0 #10
+recording_idx=20 #10
 
 
 if not LIVE_GRAPH: plt.close('all')
@@ -154,7 +154,7 @@ def merge_rectangles(rects):
                 for c,b in items:
                     dist = np.linalg.norm(np.asarray(c) - np.asarray(seed[0]))
                     (group1 if dist < 60 else group2).append((c,b)) #! 150,80(good)
-
+                    #! set dist value based on group size? std and size? (truck and trailer)
                 # objects.append(get_max_box(group1))
                 objects.append(set_min_box(seed[1])) #* only 1 box per group (c1 seed)
 
@@ -250,18 +250,20 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
 
 
 #* didn't work well
-fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=60, detectShadows=True) # 500,16,True
+fgbg = cv2.createBackgroundSubtractorMOG2(history=400, varThreshold=120, detectShadows=False) # 500,16,True
 
 kernel = np.ones((3,3), np.uint8) #* ODD (1 in None)
+
 prev_frame = cap.read()[1]
-prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+# prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
 # prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_OPEN, kernel)
 # prev_frame = cv2.morphologyEx(prev_frame, cv2.MORPH_CLOSE, kernel)
 
 if SKIP_FRAMES: cap.set(cv2.CAP_PROP_POS_FRAMES, 160)
 while cap.isOpened():
     ret, frame = cap.read()
-    if not ret:
+    if not ret or frame is None:
+        cap.release()
         cap = capture()
         continue
 
@@ -280,10 +282,11 @@ while cap.isOpened():
         prev_frame = frame
         continue
 
-    frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
-    frame = cv2.morphologyEx(frame,cv2.MORPH_CLOSE, kernel)
+    # frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
+    # frame = cv2.morphologyEx(frame,cv2.MORPH_CLOSE, kernel)
     delta = cv2.absdiff(prev_frame, frame)
-    _,thresh = cv2.threshold(delta, 50, 255, cv2.THRESH_BINARY) #! 60-lower causes more noise
+    _,thresh = cv2.threshold(delta,55, 255, cv2.THRESH_BINARY) #! 5,60-lower causes more noise
+    # thresh = fgbg.apply(frame, learningRate=-1)
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
     # orig_frame[120:400, 650:780] = 0 #FEEDER
 
@@ -319,9 +322,10 @@ while cap.isOpened():
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
         cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 2)
 #! IMSHOW
-    # cv2.imshow(f'thresh - {recording_idx}', thresh)
-    cv2.imshow(f'original - {recording_idx}', orig_frame)
+    cv2.imshow(f'thresh - {recording_idx}', thresh)
+    # cv2.imshow(f'original - {recording_idx}', orig_frame)
 
+    # if cur_frame_count % 2:
     prev_frame = frame
     if RECORDER: rec.write(orig_frame) #record thresh too
 
@@ -333,6 +337,9 @@ while cap.isOpened():
         prev_frame = cap.read()[1]
         prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
         graph_hist.clear()
+        live_tracker.clear()
+        # fgbg = cv2.createBackgroundSubtractorMOG2(history=400, varThreshold=120, detectShadows=False)
+
     # if key == ord('f'):
     #     cur_frame_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
     #     np.savetxt(f'./dataset/motion/delta/frame_delta_{cur_frame_pos}.csv', delta, delimiter=',', fmt='%d')
