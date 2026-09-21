@@ -120,7 +120,7 @@ def draw_objects(rectangles):
 #* PRINT OBJ RECTANGLES
 def draw_live_tracker(tracker, orig_frame, thresh):
     for t in tracker:
-        if t['count'] < 4: continue #* filters out some noisy trackers - run ttl down
+        if t['count'] < 5: continue #* filters out some noisy trackers - run ttl down
         x, y, w, h = t['box']
         # w,h = t['box_size_avg']
 
@@ -199,7 +199,7 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
     #! boxes still up after off camera (fix)
     for i,center in enumerate(centers):
         center = np.array(center)
-        ttl = FPS*5 if by_feeder(center) else FPS//2 #* birds sitting or hovering so dont use pred alg
+        ttl = FPS*5 if by_feeder(center) else FPS//3 #* birds sitting or hovering so dont use pred alg
         trk = dict()
         score = -1
         for t in tracker:
@@ -303,7 +303,7 @@ while cap.isOpened():
     # frame = cv2.morphologyEx(frame,cv2.MORPH_OPEN, kernel) # erode and dilate together (removes noise)
     # frame = cv2.morphologyEx(frame,cv2.MORPH_CLOSE, kernel)
     delta = cv2.absdiff(prev_frame, frame)
-    _,thresh = cv2.threshold(delta,55, 255, cv2.THRESH_BINARY) #! 5,60-lower causes more noise
+    _,thresh = cv2.threshold(delta,55, 255, cv2.THRESH_BINARY) #! 50,60-lower causes more noise
     # thresh = fgbg.apply(frame, learningRate=-1)
     thresh[FRAME_HEIGHT - 70 :, FRAME_WIDTH - 550 :] = 0 # black out timer
     # orig_frame[120:400, 650:780] = 0 #FEEDER
