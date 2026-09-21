@@ -111,6 +111,24 @@ def get_box_size(item):
     x,y,w,h = item
     return (w,h)
 
+#* PRINT ALL RECTANGLES - mini
+def draw_objects(rectangles):
+    for (x,y,w,h) in rectangles:
+        cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 1)
+        cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (255, 255, 0), 1)
+
+#* PRINT OBJ RECTANGLES
+def draw_live_tracker(tracker, orig_frame, thresh):
+    for t in tracker:
+        if t['count'] < 4: continue #* filters out some noisy trackers - run ttl down
+        x, y, w, h = t['box']
+        # w,h = t['box_size_avg']
+
+        #*frame,text,pos,font,fontScale,color,lineType
+        cv2.putText(orig_frame, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
+        cv2.putText(thresh, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
+        cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 2)
 
 def merge_rectangles(rects):
     #* boundingRec: x,y,w,h (top left corner, width, height)
@@ -303,27 +321,15 @@ while cap.isOpened():
     #* contourArea is used to filter out some white noise from thresh and camera
     rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #! 20
 
-    #! PRINT ALL RECTANGLES - mini
-    for (x,y,w,h) in rectangles:
-        cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 1)
-        cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (255, 255, 0), 1)
 
+    draw_objects(rectangles)
     objects = merge_rectangles(rectangles)
     update_tracker(objects,cur_frame_count)
-    #! PRINT OBJ RECTANGLES
-    for t in live_tracker:
-        if t['count'] < 4: continue #* filters out some noisy trackers - run ttl down
-        x, y, w, h = t['box']
-        # w,h = t['box_size_avg']
+    draw_live_tracker(live_tracker, orig_frame, thresh)
 
-        #*frame,text,pos,font,fontScale,color,lineType
-        cv2.putText(orig_frame, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
-        cv2.putText(thresh, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
-        cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 2)
 #! IMSHOW
-    cv2.imshow(f'thresh - {recording_idx}', thresh)
-    # cv2.imshow(f'original - {recording_idx}', orig_frame)
+    # cv2.imshow(f'thresh - {recording_idx}', thresh)
+    cv2.imshow(f'original - {recording_idx}', orig_frame)
 
     # if cur_frame_count % 2:
     prev_frame = frame
