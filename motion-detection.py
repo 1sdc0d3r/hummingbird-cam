@@ -23,8 +23,8 @@ graph_hist = {}
 #? keep consistent w/h sizes? only use center or x/y?
 
 RTSP_URL='rtsp://192.168.0.242:8554/front-door-cam'
-RECORDINGS = sorted(f for f in Path('./dataset/detections').iterdir() if f.suffix in ('.mp4','.MP4','.mov'))
-RECORDINGS[:0] = [f for f in Path('./dataset/motion').iterdir() if f.suffix in ('.mp4','.MP4','.mov')]
+RECORDINGS = sorted(str(f) for f in Path('./dataset/detections').iterdir() if f.suffix in ('.mp4','.MP4','.mov'))
+RECORDINGS[:0] = [str(f) for f in Path('./dataset/motion').iterdir() if f.suffix in ('.mp4','.MP4','.mov')]
 # RECORDINGS.extend(sorted(f for f in Path('./dataset/motion').iterdir() if f.suffix in ('.mp4','.MP4','.mov')))
 # RECORDINGS.insert(0, './dataset/motion/cars.MP4')
 # RECORDINGS.insert(0, './dataset/motion/truck1.MP4')
@@ -46,13 +46,15 @@ def capture():
         return cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
     else:
         cv2.destroyAllWindows()
-        c = cv2.VideoCapture(RECORDINGS[recording_idx])
+        if recording_idx >= len(RECORDINGS): sys.exit('last recording')
+        c = cv2.VideoCapture(str(RECORDINGS[recording_idx]))
         # c = cv2.VideoCapture('./dataset/motion/cars.MP4')
         recording_idx+=1
         graph_hist = {}
         return c
 
 cap = capture()
+# todo calc for each clip
 FRAME_COUNT = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if not LIVE else -1
 FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) # 1920x1080
@@ -93,11 +95,12 @@ def by_feeder(center):
     return (x <= cx < x + w and y <= cy < y + h) or (x1 <= cx < x1 + w1 and y1 <= cy < y1 + h1)
 
 #* normalize min box size (width/height)
-def set_min_box(item,m=25):
+#! can exceed frame w/h
+def set_min_box(item,min_w=25,min_h=25):
     x = list(item)
-    if x[2] < m: x[2]=m
-    if x[3] < m: x[3]=m
-    return x
+    if x[2] < min_w: x[2]=min_w
+    if x[3] < min_h: x[3]=min_h
+    return tuple(x)
 
 def get_max_box(items):
     boxes = [b for _,b in items]
@@ -107,12 +110,8 @@ def get_max_box(items):
     y2=max(b[1]+b[3] for b in boxes)
     return set_min_box((x,y,x2-x,y2-y))
 
-def get_box_size(item):
-    x,y,w,h = item
-    return (w,h)
-
 #* PRINT ALL RECTANGLES - mini
-def draw_objects(rectangles):
+def draw_objects(rectangles, orig_frame, thresh):
     for (x,y,w,h) in rectangles:
         cv2.rectangle(thresh, (x, y), (x + w, y + h), (255, 255, 0), 1)
         cv2.rectangle(orig_frame, (x, y), (x + w, y + h), (255, 255, 0), 1)
@@ -120,9 +119,8 @@ def draw_objects(rectangles):
 #* PRINT OBJ RECTANGLES
 def draw_live_tracker(tracker, orig_frame, thresh):
     for t in tracker:
-        if t['count'] < 5: continue #* filters out some noisy trackers - run ttl down
+        if len(t['trace']) < 5: continue #* filters out some noisy trackers - run ttl down
         x, y, w, h = t['box']
-        # w,h = t['box_size_avg']
 
         #*frame,text,pos,font,fontScale,color,lineType
         cv2.putText(orig_frame, str(t['uuid'])[-1:-4:-1], (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,50,255), 2)
@@ -173,8 +171,8 @@ def merge_rectangles(rects):
                     dist = np.linalg.norm(np.asarray(c) - np.asarray(seed[0]))
                     (group1 if dist < 60 else group2).append((c,b)) #! 150,80(good)
                     #! set dist value based on group size? std and size? (truck and trailer)
-                # objects.append(get_max_box(group1))
-                objects.append(set_min_box(seed[1])) #* only 1 box per group (c1 seed)
+                # objects.append(set_min_box(seed[1])) #* only 1 box per group (c1 seed)
+                objects.append(get_max_box(group1))
 
                 items = group2
             if items: #leftover after loop
@@ -184,6 +182,8 @@ def merge_rectangles(rects):
 
 live_tracker=[]
 def update_tracker(objects, frame_num, tracker=live_tracker):
+    objects.sort(key=lambda r: (r[2]*r[3]), reverse=True)
+
     #* remove expired trackers (save to db)
     for t in tracker:
         t['TTL'] -= 1
@@ -191,7 +191,6 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             tracker.remove(t)
 
     centers = [(x+w//2, y+h//2) for x,y,w,h in objects]
-
     #! find the mean size of object for consistent size (truck behind pillar, ect)
     #! do I care about speed across skipped frames? last_frame-cur_frame in trk so velocity per frame?
     #! clear out noisy trackers
@@ -199,13 +198,16 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
     #! boxes still up after off camera (fix)
     for i,center in enumerate(centers):
         center = np.array(center)
-        ttl = FPS*5 if by_feeder(center) else FPS//3 #* birds sitting or hovering so dont use pred alg
+        feeder = by_feeder(center)
+        ttl = FPS*5 if feeder else FPS//3 #* birds sitting or hovering so dont use pred alg
         trk = dict()
         score = -1
+
         for t in tracker:
-            #* use predictive tracker on non-feeder areas
+            if t['last_frame'] == frame_num: continue
             t_center = np.array(t['center'])
-            s = np.linalg.norm(center-t_center) if by_feeder(center) else np.linalg.norm(center-t['prediction'])
+            #* use predictive tracker on non-feeder areas
+            s = np.linalg.norm(center-t_center) if feeder else np.linalg.norm(center-t['prediction'])
             if s < score or score == -1:
                 trk = t
                 score = s
@@ -216,17 +218,14 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
 
         if trk and score < 200: #! reduce val as acc inc
             trk['TTL'] = ttl
-            trk['count'] += 1
             trk['center'] = center
             trk['box'] = objects[i]
             trk['last_frame'] = frame_num
-            trk['trace'].append(center)
-            trk['box_sizes'].append(get_box_size(objects[i])) #! this is wrong <-- get_box_size. this is where you start next... store w,h separate (not just area)
-            trk['box_size_avg'] = np.mean(trk['box_sizes'], axis=0).astype(int).tolist()
-            trk['by_feeder'] = by_feeder(center)
+            trk['trace'].append(center) #!  trace center? what about track full box?
+            trk['by_feeder'] = feeder
 
             #* vector math
-            a = trk['init_center'] # growing magnitude as leaves origin point
+            a = trk['trace'][0] # growing magnitude as leaves origin point
             a = trk['trace'][-2] # prev
             b = center # current
             velocity = b-a
@@ -250,17 +249,15 @@ def update_tracker(objects, frame_num, tracker=live_tracker):
             #* new trackers
             new_obj = {
                 'uuid':uuid4(),
-                'TTL':ttl,
-                'center':center,
-                'init_center':center,
                 'box':objects[i],
-                'count':1,
+                'center':center,
+                'TTL':ttl,
                 'init_frame':frame_num,
                 'last_frame':frame_num,
                 'trace':[center],
-                'box_sizes': [get_box_size(objects[i])],
-                'box_size_avg': get_box_size(objects[i]),#* changes to numpy later, db issue? needed,hmm
+                # 'trace':[(frame_num, objects[1])],
                 'prediction': center,
+                'velocity': np.zeros(2),
                 'by_feeder': by_feeder(center), #nice to have for the db
                 }
             tracker.append(new_obj)
@@ -283,6 +280,10 @@ while cap.isOpened():
     if not ret or frame is None:
         cap.release()
         cap = capture()
+        prev_frame = cap.read()[1]
+        prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+        graph_hist.clear()
+        live_tracker.clear()
         continue
 
     cur_frame_count = cap.get(cv2.CAP_PROP_POS_FRAMES)
@@ -296,6 +297,7 @@ while cap.isOpened():
     orig_frame = frame.copy()
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+    #! I don't like doing this. set tracker to ignore these frames
     if cur_frame_count < 4: # stops recordings from delta changes
         prev_frame = frame
         continue
@@ -322,7 +324,7 @@ while cap.isOpened():
     rectangles = [list(cv2.boundingRect(c)) for c in contours if cv2.contourArea(c) > 20] #! 20
 
 
-    draw_objects(rectangles)
+    draw_objects(rectangles,orig_frame,thresh)
     objects = merge_rectangles(rectangles)
     update_tracker(objects,cur_frame_count)
     draw_live_tracker(live_tracker, orig_frame, thresh)
@@ -331,7 +333,6 @@ while cap.isOpened():
     # cv2.imshow(f'thresh - {recording_idx}', thresh)
     cv2.imshow(f'original - {recording_idx}', orig_frame)
 
-    # if cur_frame_count % 2:
     prev_frame = frame
     if RECORDER: rec.write(orig_frame) #record thresh too
 
@@ -345,10 +346,6 @@ while cap.isOpened():
         graph_hist.clear()
         live_tracker.clear()
         # fgbg = cv2.createBackgroundSubtractorMOG2(history=400, varThreshold=120, detectShadows=False)
-
-    # if key == ord('f'):
-    #     cur_frame_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
-    #     np.savetxt(f'./dataset/motion/delta/frame_delta_{cur_frame_pos}.csv', delta, delimiter=',', fmt='%d')
     if key == ord('q'):
         if RECORDER: plt.savefig(f'{rec_path}/graph.png') #? on next?
         break
